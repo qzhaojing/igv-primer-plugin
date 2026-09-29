@@ -285,7 +285,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         java.awt.Component f =
                 java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
         if (f == null) return false;
-        return f instanceof javax.swing.JTextComponent
+        return f instanceof javax.swing.text.JTextComponent
                 || f instanceof javax.swing.JComboBox
                 || f instanceof javax.swing.JSpinner;
     }

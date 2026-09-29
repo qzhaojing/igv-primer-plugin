@@ -1,12 +1,18 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.4]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.5]
 
 ## 状态
-- 版本 **v0.1.4**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.5**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
 - 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
 - 启动 IGV 后「Primers 引物」轨自动出现（空轨，在数据面板里）。
 - ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
+
+## v0.1.5 更新（首次可编译构建 + 构建修复）
+- 修复 v0.1.2 键盘快捷键里的编译错误：`javax.swing.JTextComponent` 应为 `javax.swing.text.JTextComponent`（`import javax.swing.*` 不含子包），此前因无编译环境未暴露，本次重建时修复。
+- 修复 `install.py` 注入时同路径既读又写导致在某些平台报 `Truncated file header` 的隐患，改为「先写临时文件、再原子替换」。
+- 重新构建 `PrimerPlugin.jar`（v0.1.5）：首次真正包含 v0.1.2–v0.1.4 的键盘快捷键、Ctrl 配对、产物长度、F/R 异链限制等全部功能。
+- 构建命令：`JAVA8_HOME=<jdk8> IGV_JAR=<igv.jar> bash build.sh && python install.py --package`。
 
 ## v0.1.4 更新（配对只允许 F/R 异链）
 - **强制 F(+) 与 R(-) 异链配对**：Ctrl+点击 时若两条引物同为正向（F-F）或同为反向（R-R），拒绝配对并弹窗提示，不做任何改动。

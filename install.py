@@ -133,6 +133,8 @@ def main():
     cls = load_plugin_bytes()
 
     # 3) 重写 jar: 注入类 + 去签名 + 确保注册
+    #    注意: 必须先写临时文件再原子替换, 不能同路径既读又写,
+    #    否则在某些平台/Python 版本下写操作会截断正在读取的文件 (Truncated file header).
     zr = zipfile.ZipFile(target, "r")
     names = zr.namelist()
     bl = zr.read(REG).decode("utf-8", "replace")
@@ -144,22 +146,32 @@ def main():
     else:
         log("注册项已存在，跳过")
 
-    zw = zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED)
-    order = sorted(names, key=lambda n: (n != "META-INF/MANIFEST.MF", n))
-    for n in order:
-        up = n.upper()
-        if up.endswith((".SF", ".RSA", ".DSA")) or "CODESIGN" in up:
-            continue  # 去签名
-        if n == REG:
-            zw.writestr(n, bl)
-        elif n in cls:
-            zw.writestr(n, cls.pop(n))
-        else:
-            zw.writestr(n, zr.read(n))
-    for n, b in cls.items():  # 兜底: 原 jar 没有的新 class
-        zw.writestr(n, b)
-    zw.close()
-    zr.close()
+    import tempfile
+    tmpfd, tmpname = tempfile.mkstemp(
+        dir=os.path.dirname(os.path.abspath(target)), suffix=".tmp")
+    os.close(tmpfd)
+    try:
+        zw = zipfile.ZipFile(tmpname, "w", zipfile.ZIP_DEFLATED)
+        order = sorted(names, key=lambda n: (n != "META-INF/MANIFEST.MF", n))
+        for n in order:
+            up = n.upper()
+            if up.endswith((".SF", ".RSA", ".DSA")) or "CODESIGN" in up:
+                continue  # 去签名
+            if n == REG:
+                zw.writestr(n, bl)
+            elif n in cls:
+                zw.writestr(n, cls.pop(n))
+            else:
+                zw.writestr(n, zr.read(n))
+        for n, b in cls.items():  # 兜底: 原 jar 没有的新 class
+            zw.writestr(n, b)
+        zw.close()
+        zr.close()
+        os.replace(tmpname, target)  # 原子替换, 失败则保留原文件
+    except Exception:
+        if os.path.exists(tmpname):
+            os.remove(tmpname)
+        raise
 
     log("安装完成 -> %s (%d bytes)" % (target, os.path.getsize(target)))
     log("重启 IGV 即可使用引物插件（Primer 轨自动加载，无需额外操作）。")
