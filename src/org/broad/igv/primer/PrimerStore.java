@@ -302,6 +302,66 @@ public class PrimerStore {
         p.pairWith = null;
     }
 
+    // ---------- 批量操作（v0.1.8） ----------
+
+    /** 删除全部未通过评估的引物（pass==false，含被二聚体 flag 的）。返回删除条数。
+     *  同时清理被删引物遗留的孤立配对（残留 ampliconId/pairWith），避免悬空连线。
+     *  注意：无撤销机制，调用方应在 UI 层先 confirm。 */
+    public static synchronized int removeFailed() {
+        int cnt = 0;
+        java.util.List<Primer> keep = new java.util.ArrayList<Primer>();
+        for (Primer p : primers) {
+            if (p.pass) keep.add(p);
+            else cnt++;
+        }
+        if (cnt == 0) return 0;
+        primers.clear();
+        primers.addAll(keep);
+        cleanOrphanPairs();
+        if (selected != null && !primers.contains(selected)) selected = null;
+        refresh();
+        autosave(true);
+        return cnt;
+    }
+
+    /** 解除全部配对：所有引物 ampliconId/pairWith 置空，并重算二聚体标记。 */
+    public static synchronized void clearAllPairs() {
+        boolean any = false;
+        for (Primer p : primers) {
+            if (p.ampliconId != null || p.pairWith != null) any = true;
+            p.ampliconId = null;
+            p.pairWith = null;
+        }
+        if (!any) return;
+        evaluatePairs();
+        refresh();
+        autosave(true);
+    }
+
+    /** 批量设置全部引物的测序读段长度 readLen（nt）。readLen>0 才生效；会改变 readRegion→布局/连线。 */
+    public static synchronized void setAllReadLen(int len) {
+        if (len <= 0) return;
+        for (Primer p : primers) p.readLen = len;
+        refresh();
+        autosave(true);
+    }
+
+    /** 清理孤立配对：组内仅剩 1 条成员的 ampliconId 失去意义，清掉其 ampliconId/pairWith。 */
+    private static void cleanOrphanPairs() {
+        java.util.Map<String, Integer> counts = new java.util.HashMap<String, Integer>();
+        for (Primer p : primers) {
+            if (p.ampliconId != null) {
+                counts.put(p.ampliconId, counts.getOrDefault(p.ampliconId, 0) + 1);
+            }
+        }
+        for (Primer p : primers) {
+            if (p.ampliconId != null && counts.get(p.ampliconId) < 2) {
+                p.ampliconId = null;
+                p.pairWith = null;
+            }
+        }
+    }
+
     // ---------- 默认参数持久化（~/.igv_primer_defaults.properties） ----------
 
     private static File configFile() {

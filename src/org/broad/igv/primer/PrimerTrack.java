@@ -521,6 +521,61 @@ public class PrimerTrack extends AbstractTrack {
             }
         }));
 
+        // v0.1.8 批量操作子菜单
+        JMenu batchMenu = new JMenu("批量操作");
+        int failCnt = 0;
+        for (Primer p : PrimerStore.getPrimers()) if (!p.pass) failCnt++;
+        final int fCnt = failCnt;
+        batchMenu.add(item("删除全部失败引物 (" + failCnt + ")", new Runnable() {
+            public void run() {
+                if (fCnt == 0) {
+                    JOptionPane.showMessageDialog(null, "当前没有失败引物，无需删除。");
+                    return;
+                }
+                int r = JOptionPane.showConfirmDialog(null,
+                        "确认删除全部 " + fCnt + " 条失败引物？\n（此操作不可撤销，建议先导出 BED 备份）",
+                        "批量删除失败引物", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) {
+                    int removed = PrimerStore.removeFailed();
+                    JOptionPane.showMessageDialog(null, "已删除 " + removed + " 条失败引物，孤立配对已同步清理。");
+                }
+            }
+        }));
+        batchMenu.add(item("解除全部配对", new Runnable() {
+            public void run() {
+                boolean hasPair = false;
+                for (Primer p : PrimerStore.getPrimers()) if (p.ampliconId != null) { hasPair = true; break; }
+                if (!hasPair) {
+                    JOptionPane.showMessageDialog(null, "当前没有已配对的引物。");
+                    return;
+                }
+                int r = JOptionPane.showConfirmDialog(null, "确认解除全部引物配对？",
+                        "解除全部配对", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) {
+                    PrimerStore.clearAllPairs();
+                    JOptionPane.showMessageDialog(null, "已解除全部配对。");
+                }
+            }
+        }));
+        batchMenu.add(item("设置全部 readLen...", new Runnable() {
+            public void run() {
+                String s = JOptionPane.showInputDialog(null, "设置全部引物的测序读段长度 (nt):", "150");
+                if (s == null) return;
+                try {
+                    int len = Integer.parseInt(s.trim());
+                    if (len <= 0) {
+                        JOptionPane.showMessageDialog(null, "长度必须为正整数。");
+                        return;
+                    }
+                    PrimerStore.setAllReadLen(len);
+                    JOptionPane.showMessageDialog(null, "已将全部引物 readLen 设为 " + len + " nt。");
+                } catch (NumberFormatException ex) {
+                    JOptionPane.showMessageDialog(null, "请输入有效的整数。");
+                }
+            }
+        }));
+        menu.add(batchMenu);
+
         menu.addSeparator();
         menu.add(item("导出 BED（方向+颜色+测序长度）", new Runnable() {
             public void run() {
