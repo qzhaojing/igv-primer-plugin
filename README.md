@@ -1,12 +1,17 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.5]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.6]
 
 ## 状态
-- 版本 **v0.1.5**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.6**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
 - 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
 - 启动 IGV 后「Primers 引物」轨自动出现（空轨，在数据面板里）。
 - ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
+
+## v0.1.6 更新（导出/导入锁定布局行）
+- **布局随 BED 定死**：导出时把每条引物当前所在的行号写进 BED name（新增 `|r行号` 段），导入（含自动保存恢复）时原样还原上下排布，不再重新自动布局导致"乱掉"。
+- 行号取自渲染时的最终布局（含手动拖动 rowOverride、配对同行规则）；当前染色体之外的引物仍按其手动行或自动布局。
+- BED name 段顺序：`名字|role|readNN[|g分组][|a配对组ID][|c颜色][|r行号]`；旧 BED（无 `|r`）导入仍走自动布局，完全兼容。
 
 ## v0.1.5 更新（首次可编译构建 + 构建修复）
 - 修复 v0.1.2 键盘快捷键里的编译错误：`javax.swing.JTextComponent` 应为 `javax.swing.text.JTextComponent`（`import javax.swing.*` 不含子包），此前因无编译环境未暴露，本次重建时修复。

@@ -69,12 +69,18 @@ public class Primer {
         return chr + ":" + (start + 1) + "-" + end;
     }
 
-    /** BED name 字段：名字|role|readNN[|g分组][|a配对组ID][|c颜色] */
+    /** BED name 字段：名字|role|readNN[|g分组][|a配对组ID][|c颜色][|r行号] */
     public String bedName() {
+        return bedName(null);
+    }
+
+    /** 同上；pinRow 非 null 时追加 |r行号（导出时把当前布局行写死，导入可原样恢复） */
+    public String bedName(Integer pinRow) {
         return name + "|" + role + "|read" + readLen
                 + (group == null ? "" : "|g" + group)
                 + (ampliconId == null ? "" : "|a" + ampliconId)
-                + (color == null ? "" : "|c" + color);
+                + (color == null ? "" : "|c" + color)
+                + (pinRow == null ? "" : "|r" + pinRow);
     }
 
     public String colorHex() {

@@ -58,8 +58,11 @@ public class ExportUtils {
             w.newLine();
             for (Primer p : PrimerStore.getPrimers()) {
                 // thick 限制在 [start,end] 内（= 引物本体），测序延长区单独展示、不合并进引物长度
+                // v0.1.6：把当前布局行号写死进 name（|r行号），导入/自动保存可原样恢复上下排布
+                Integer row = PrimerStore.screenRows.containsKey(p)
+                        ? PrimerStore.screenRows.get(p) : p.rowOverride;
                 w.write(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
-                        p.chr, p.start, p.end, p.bedName(), p.strand, p.start, p.end, p.colorHex()));
+                        p.chr, p.start, p.end, p.bedName(row), p.strand, p.start, p.end, p.colorHex()));
                 w.newLine();
             }
         } finally {
@@ -189,7 +192,7 @@ public class ExportUtils {
         }
     }
 
-    /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p配对名 解析为 pairWith（导入后按名回链配对）。 */
+    /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p配对名 解析为 pairWith（导入后按名回链配对）；|r行号 恢复布局行。 */
     private static int parseBED(File f, String group, List<Primer> out) throws Exception {
         int n = 0;
         BufferedReader r = new BufferedReader(new FileReader(f));
@@ -204,6 +207,7 @@ public class ExportUtils {
             String g = group;   // 默认：来源文件名；BED 内嵌 |gXXX 时优先
             String pairWith = null;
             String color = null;
+            int row = -1;       // v0.1.6：|r行号 → rowOverride（布局定死恢复）；-1 = 自动布局
             int pipe = name.indexOf('|');
             String aId = null;
             if (pipe > 0) {
@@ -221,6 +225,8 @@ public class ExportUtils {
                         color = seg.substring(1);
                     } else if (seg.startsWith("p") && seg.length() > 1) {
                         pairWith = seg.substring(1);
+                    } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
+                        try { row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) {}
                     }
                 }
                 // 兼容：第 2 段为纯 role（无前缀）时设为角色
@@ -236,6 +242,7 @@ public class ExportUtils {
             p.group = g;
             p.pairWith = pairWith;
             p.color = color;
+            if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
             out.add(p);
             n++;
         }
