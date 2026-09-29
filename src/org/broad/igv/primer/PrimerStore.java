@@ -1,0 +1,286 @@
+package org.broad.igv.primer;
+
+import org.broad.igv.feature.genome.Genome;
+import org.broad.igv.feature.genome.GenomeManager;
+import org.broad.igv.ui.IGV;
+
+import java.awt.Rectangle;
+import java.io.File;
+import java.io.FileReader;
+import java.io.FileWriter;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Properties;
+
+/**
+ * 引物仓库：全局唯一列表 + 序列刷新 + 全量评估 + 配对二聚体。
+ */
+public class PrimerStore {
+
+    private static final List<Primer> primers = new ArrayList<Primer>();
+    private static PrimerTrack track;
+    public static Primer selected;
+    public static String lastChr;   // 最近渲染的染色体（快速添加用）
+
+    // 渲染时记录每条引物在屏幕上的矩形（含 y），供编辑工具做命中检测
+    public static final java.util.Map<Primer, Rectangle> screenRects =
+            new java.util.HashMap<Primer, Rectangle>();
+
+    // 渲染时记录每条引物所在行号（供上下拖动换行计算用）
+    public static final java.util.Map<Primer, Integer> screenRows =
+            new java.util.HashMap<Primer, Integer>();
+
+    // 右键菜单"显示序列"开关：选中后在引物下方画碱基序列
+    public static boolean showSeq = false;
+    public static boolean autosaveEnabled = true;   // 自动保存引物到 ~/.igv_primer_autosave.bed（防丢失）
+
+    // 默认设计参数（由添加对话框记忆；R1/R2 默认 0，可在对话框手动改并"保存配置"持久化）
+    public static int defaultLen = 20;
+    public static char defaultStrand = '+';
+    public static String defaultRole = "R1";
+    public static int defaultReadF = 0;
+    public static int defaultReadR = 0;
+    public static boolean defaultIncludeLen = false;  // 测序长度是否包含引物长度
+
+    static {
+        loadDefaults();
+    }
+
+    public static synchronized List<Primer> getPrimers() {
+        return new ArrayList<Primer>(primers);
+    }
+
+    public static synchronized void setTrack(PrimerTrack t) {
+        track = t;
+    }
+
+    public static synchronized void add(Primer p) {
+        primers.add(p);
+        linkByName(p);
+        refreshSequence(p);
+        refresh();
+        autosave(true);
+    }
+
+    public static synchronized void remove(Primer p) {
+        primers.remove(p);
+        if (selected == p) selected = null;
+        refresh();
+        autosave(true);
+    }
+
+    public static synchronized void clear() {
+        primers.clear();
+        selected = null;
+        refresh();
+        autosave(true);
+    }
+
+    public static synchronized void addAll(List<Primer> list) {
+        primers.addAll(list);
+        for (Primer p : list) linkByName(p);   // 导入 BED 时按 pairWith 名回链配对（重连 ampliconId）
+        refresh();
+        autosave(true);
+    }
+
+    // ---------- 自动保存（IGV session XML 不保存插件注入的 PrimerTrack，用它兜底防丢失） ----------
+
+    private static long lastAutosave = 0;
+
+    /** force=true 立即写盘（增删清空等结构变更）；false 节流 1.5s（拖动/刷新高频调用） */
+    public static void autosave(boolean force) {
+        if (!autosaveEnabled) return;
+        long now = System.currentTimeMillis();
+        if (!force && now - lastAutosave < 1500) return;
+        lastAutosave = now;
+        try {
+            ExportUtils.writeBED(ExportUtils.autosaveFile());
+        } catch (Throwable ignore) {
+        }
+    }
+
+    /** 拉取参考序列并重算单引物指标 + 配对指标 */
+    public static void refreshSequence(Primer p) {
+        Genome g = GenomeManager.getInstance().getCurrentGenome();
+        if (g == null) {
+            p.seq = "";
+        } else {
+            byte[] b = g.getSequence(p.chr, p.start, p.end);
+            p.seq = b == null ? "" : new String(b).toUpperCase();
+        }
+        PrimerMetrics.evaluate(p);
+    }
+
+    public static void refreshAll() {
+        for (Primer p : primers) refreshSequence(p);
+        evaluatePairs();
+        refresh();
+    }
+
+    /** 配对评估：同 ampliconId 的 R1/R2 之间 heteroDG 与 3' 互补 */
+    public static void evaluatePairs() {
+        for (Primer p : primers) {
+            p.heteroDG = 0;
+            p.max3pComp = 0;
+        }
+        for (int i = 0; i < primers.size(); i++) {
+            Primer a = primers.get(i);
+            for (int j = i + 1; j < primers.size(); j++) {
+                Primer b = primers.get(j);
+                boolean paired = a.ampliconId != null && a.ampliconId.equals(b.ampliconId);
+                boolean cross = !paired && a.chr.equals(b.chr);
+                if (!paired && !cross) continue;
+                double dg = PrimerMetrics.dimerDG(a.seq, b.seq);
+                int c3 = PrimerMetrics.max3pComplement(a.seq, b.seq);
+                a.heteroDG = Math.min(a.heteroDG, dg);
+                a.max3pComp = Math.max(a.max3pComp, c3);
+                b.heteroDG = Math.min(b.heteroDG, dg);
+                b.max3pComp = Math.max(b.max3pComp, c3);
+                if (c3 >= 4 || dg <= -5.0) {
+                    flag(a, "二聚体(3'comp=" + c3 + ")");
+                    flag(b, "二聚体(3'comp=" + c3 + ")");
+                }
+            }
+        }
+    }
+
+    private static void flag(Primer p, String reason) {
+        p.pass = false;
+        p.failReasons = (p.failReasons.isEmpty() ? "" : p.failReasons + " ") + reason;
+    }
+
+    public static void refresh() {
+        if (track != null) track.update();
+        IGV.getInstance().doRefresh();
+        autosave(false);   // 节流自动保存，覆盖拖动/改色等变更
+    }
+
+    public static synchronized String nextName() {
+        int max = 0;
+        for (Primer p : primers) {
+            if (p.name != null && p.name.startsWith("P")) {
+                try {
+                    max = Math.max(max, Integer.parseInt(p.name.substring(1).split("[^0-9]")[0]));
+                } catch (Exception ignore) {
+                }
+            }
+        }
+        return String.format("P%03d", max + 1);
+    }
+
+    private static int groupSeq = 0;
+    public static synchronized String nextAmplicon() {
+        return "G" + (++groupSeq);
+    }
+
+    /** 按名称配对：p.pairWith 或 某引物的 pairWith 指向 p.name → 共享 ampliconId（即连线 + 算异源二聚体） */
+    public static synchronized void linkByName(Primer p) {
+        for (Primer q : primers) {
+            if (q == p) continue;
+            boolean match = (p.pairWith != null && p.pairWith.equals(q.name))
+                    || (q.pairWith != null && q.pairWith.equals(p.name));
+            if (match) {
+                String aid = (p.ampliconId != null) ? p.ampliconId
+                        : (q.ampliconId != null ? q.ampliconId : nextAmplicon());
+                p.ampliconId = aid;
+                q.ampliconId = aid;
+            }
+        }
+    }
+
+    /** 按名称列表配对：p + 所有同名引物共享一个配对组 ID（支持一条引物配多条，即 1:N）。
+     *  优先并入任一伙伴已有的组（复用其 ID）；若伙伴均无组，则复用 p 的组 ID 或生成新组。 */
+    public static synchronized void linkByNames(Primer p, String[] names) {
+        String gid = null;
+        for (String nm : names) {
+            nm = nm.trim();
+            if (nm.isEmpty()) continue;
+            for (Primer q : primers) {
+                if (nm.equals(q.name) && q.ampliconId != null) { gid = q.ampliconId; break; }
+            }
+            if (gid != null) break;
+        }
+        if (gid == null) gid = (p.ampliconId != null) ? p.ampliconId : nextAmplicon();
+        p.ampliconId = gid;
+        for (String nm : names) {
+            nm = nm.trim();
+            if (nm.isEmpty()) continue;
+            for (Primer q : primers) {
+                if (q != p && nm.equals(q.name)) q.ampliconId = gid;
+            }
+        }
+    }
+
+    /** 返回 p 所在配对组的其他成员名称（逗号连接），用于编辑框预填。 */
+    public static synchronized String groupPartnerNames(Primer p) {
+        if (p.ampliconId == null) return "";
+        StringBuilder sb = new StringBuilder();
+        for (Primer q : primers) {
+            if (q != p && p.ampliconId.equals(q.ampliconId)) {
+                if (sb.length() > 0) sb.append(",");
+                sb.append(q.name);
+            }
+        }
+        return sb.toString();
+    }
+
+    // ---------- 默认参数持久化（~/.igv_primer_defaults.properties） ----------
+
+    private static File configFile() {
+        return new File(System.getProperty("user.home"), ".igv_primer_defaults.properties");
+    }
+
+    /** 把当前对话框值写入配置文件，下次打开自动沿用 */
+    public static void saveDefaults(int len, char strand, String role, int rf, int rr, boolean incLen) {
+        defaultLen = len;
+        defaultStrand = strand;
+        defaultRole = role;
+        defaultReadF = rf;
+        defaultReadR = rr;
+        defaultIncludeLen = incLen;
+        try {
+            Properties props = new Properties();
+            props.setProperty("len", String.valueOf(len));
+            props.setProperty("strand", String.valueOf(strand));
+            props.setProperty("role", role);
+            props.setProperty("readF", String.valueOf(rf));
+            props.setProperty("readR", String.valueOf(rr));
+            props.setProperty("includeLen", String.valueOf(incLen));
+            props.store(new FileWriter(configFile()), "IGV primer designer defaults");
+        } catch (Exception ignore) {
+        }
+    }
+
+    public static void loadDefaults() {
+        try {
+            File f = configFile();
+            if (!f.exists()) return;
+            Properties props = new Properties();
+            props.load(new FileReader(f));
+            if (props.containsKey("len")) defaultLen = Integer.parseInt(props.getProperty("len"));
+            if (props.containsKey("strand")) defaultStrand = props.getProperty("strand").charAt(0);
+            if (props.containsKey("role")) defaultRole = props.getProperty("role");
+            if (props.containsKey("readF")) defaultReadF = Integer.parseInt(props.getProperty("readF"));
+            if (props.containsKey("readR")) defaultReadR = Integer.parseInt(props.getProperty("readR"));
+            if (props.containsKey("includeLen")) defaultIncludeLen = Boolean.parseBoolean(props.getProperty("includeLen"));
+            if (props.containsKey("autosave")) autosaveEnabled = Boolean.parseBoolean(props.getProperty("autosave"));
+        } catch (Exception ignore) {
+        }
+    }
+
+    /** 开关自动保存并写回配置文件 */
+    public static void setAutosave(boolean on) {
+        autosaveEnabled = on;
+        try {
+            Properties props = new Properties();
+            File f = configFile();
+            if (f.exists()) {
+                FileReader fr = new FileReader(f);
+                try { props.load(fr); } finally { fr.close(); }
+            }
+            props.setProperty("autosave", String.valueOf(on));
+            props.store(new FileWriter(f), "IGV primer designer defaults");
+        } catch (Exception ignore) {
+        }
+    }
+}

@@ -1,0 +1,16 @@
+# Compiled output
+classes/
+
+# Test / injected jars (large, build artifacts — never commit)
+_test_igv.jar
+_test_igv.jar.*
+*.bak-*
+
+# Build / install logs
+install.log
+result.txt
+
+# OS / editor
+.DS_Store
+*.swp
+*~
