@@ -233,17 +233,6 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (keyListener != null) return;
         keyListener = new java.awt.event.AWTEventListener() {
             public void eventDispatched(java.awt.AWTEvent ev) {
-                // v0.1.11：Ctrl+点击 时吞掉 IGV 原生 pan/zoom 工具对鼠标事件的响应，只走插件配对逻辑
-                if (ev instanceof java.awt.event.MouseEvent) {
-                    java.awt.event.MouseEvent me = (java.awt.event.MouseEvent) ev;
-                    if (me.getID() == java.awt.event.MouseEvent.MOUSE_PRESSED
-                            && me.isControlDown()
-                            && PrimerEditTool.inEditMode()
-                            && me.getSource() instanceof org.broad.igv.ui.panel.DataPanel) {
-                        me.consume();
-                    }
-                    return;
-                }
                 if (!(ev instanceof java.awt.event.KeyEvent)) return;
                 java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
                 if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
@@ -282,8 +271,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             }
         };
         java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
-                keyListener,
-                java.awt.AWTEvent.KEY_EVENT_MASK | java.awt.AWTEvent.MOUSE_EVENT_MASK);
+                keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
     }
 
     private static void removeKeyboard() {
