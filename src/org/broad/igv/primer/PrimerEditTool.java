@@ -71,6 +71,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             instance.installHover(dp);
         }
         PrimerStore.refresh();
+        installKeyboard();
     }
 
     public static synchronized void exitEditMode() {
@@ -85,6 +86,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             rulerGlass.repaint();
         }
         PrimerStore.refresh();
+        removeKeyboard();
     }
 
     /** 安装全窗 glass pane（拖拽 ruler 叠加层）；非交互、事件穿透 */
@@ -221,6 +223,71 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             rulerGlass.xs = null;
             rulerGlass.repaint();
         }
+    }
+
+    // ---------- 键盘快捷键：选中引物后方向键精确移动（避免鼠标拖动乱跑） ----------
+    // 用全局 AWTEventListener 捕获方向键：规避 DataPanel 焦点不确定导致的快捷键失灵。
+    private static java.awt.event.AWTEventListener keyListener;
+
+    private static void installKeyboard() {
+        if (keyListener != null) return;
+        keyListener = new java.awt.event.AWTEventListener() {
+            public void eventDispatched(java.awt.AWTEvent ev) {
+                if (!(ev instanceof java.awt.event.KeyEvent)) return;
+                java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
+                if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
+                if (!PrimerEditTool.inEditMode()) return;
+                Primer sel = PrimerStore.selected;
+                if (sel == null) return;
+                if (isTextInputFocused()) return;   // 在对话框/输入框打字时不拦截
+
+                int step = ke.isShiftDown() ? 10 : 1;
+                int horiz = 0, dRow = 0;
+                switch (ke.getKeyCode()) {
+                    case java.awt.event.KeyEvent.VK_LEFT:  horiz = -step; break;
+                    case java.awt.event.KeyEvent.VK_RIGHT: horiz =  step; break;
+                    case java.awt.event.KeyEvent.VK_UP:    dRow = -1; break;
+                    case java.awt.event.KeyEvent.VK_DOWN:  dRow =  1; break;
+                    default: return;
+                }
+
+                if (horiz != 0) {
+                    int delta = horiz;
+                    if (sel.start + delta < 0) delta = -sel.start;   // 防止越界到负坐标
+                    if (delta != 0) {
+                        sel.start += delta;
+                        sel.end += delta;
+                        PrimerStore.refreshSequence(sel);
+                    }
+                }
+                if (dRow != 0) {
+                    int base = sel.rowOverride != null ? sel.rowOverride
+                            : (PrimerStore.screenRows.get(sel) != null ? PrimerStore.screenRows.get(sel) : 0);
+                    sel.rowOverride = Math.max(0, base + dRow);
+                }
+                PrimerStore.evaluatePairs();
+                PrimerStore.refresh();
+                ke.consume();   // 阻止 IGV 原生方向键平移，避免双重响应
+            }
+        };
+        java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
+                keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
+    }
+
+    private static void removeKeyboard() {
+        if (keyListener == null) return;
+        java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(keyListener);
+        keyListener = null;
+    }
+
+    /** 焦点是否在文本输入组件上（对话框输入框/下拉框/数字框等），是则跳过快捷键 */
+    private static boolean isTextInputFocused() {
+        java.awt.Component f =
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        if (f == null) return false;
+        return f instanceof javax.swing.JTextComponent
+                || f instanceof javax.swing.JComboBox
+                || f instanceof javax.swing.JSpinner;
     }
 
     // ---------- 坐标换算（IGV 权威 API；scale = 碱基/像素） ----------

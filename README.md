@@ -1,11 +1,16 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v10.01]
 
 ## 状态
-- 已编译并注入 `F:\zhaojing\IGV_2.3.80\IGV_2.3.80_jre\lib\igv.jar`（**v10**）
-- 通用安装器 `install.py` 已就绪：可把独立 `PrimerPlugin.jar` 注入**任意** IGV 2.3.80 的 igv.jar（自动备份+去签名+写注册）
-- 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（尾部追加 `org.broad.igv.primer.PrimerPlugin`）
-- 启动方式：双击 `F:\zhaojing\IGV_2.3.80\IGV_2.3.80_jre\igv.bat`（或 igv.lnk）
-- ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins，已验证并还原其原 jar）
+- 版本 **v10.01**（IGV 2.3.80, Java 8）。
+- 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
+- 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
+- 启动 IGV 后「Primers 引物」轨自动出现（空轨，在数据面板里）。
+- ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
+
+## v10.01 更新（键盘快捷键）
+- **新增**：选中引物后方向键精确移动（←/→ 移 1 bp，Shift+←/→ 移 10 bp；↑/↓ 调视觉行），避免鼠标拖动时引物乱跑。
+- 实现：全局 `AWTEventListener` 捕获方向键；焦点在文本框/对话框时自动跳过，不影响输入；消费事件避免与 IGV 原生平移冲突。
+- 文档与打包清理：移除说明中的个人路径/个人信息；`build.sh` / `install.py` 改用环境变量指定 JDK8 与 igv.jar 路径；新增 `LICENSE`（MIT）。
 
 ## 功能与操作
 
@@ -34,6 +39,13 @@ IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
 - **释放鼠标** = 自动拉取参考序列 → 重算 Tm/GC/hairpin/self-dimer/异源二聚体/3'互补 → 刷新显示
 - "退出引物编辑模式"可恢复 IGV 纯默认行为；再次进菜单可重新开启
 
+### 键盘快捷键（精确移动选中引物）
+选中一条引物后（橙色端点手柄出现），用方向键**精确移动**，不会像鼠标拖动那样因手抖而乱跑：
+- **← / →**：整条引物左 / 右移动 1 bp（按住 **Shift** = 10 bp），固定长度平移，松手即重算 Tm/GC/二聚体。
+- **↑ / ↓**：上 / 下移动一行（视觉布局），自动设置手动行号（优先级高于自动布局），便于把引物错开分行。
+- 前提：处于「引物编辑模式」（启动即默认开启）。未选中引物时方向键仍是 IGV 原生的视图平移。
+- 在对话框输入框内打字时快捷键自动失效，不会影响输入。
+
 ### 默认参数与配对
 - 添加/编辑对话框：**R1、R2 测序长度默认 0**（允许 0，纯引物不显示延长区）。
 - 对话框内 **"保存配置"** 按钮：把当前 长度/方向/角色/R1/R2 写入 `~/.igv_primer_defaults.properties`，下次打开自动沿用。
@@ -53,7 +65,7 @@ IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
 
 ## 重新编译/部署
 ```bash
-cd igv_primer_plugin && bash build.sh          # 编译到 classes/
+cd igv_primer_plugin && bash build.sh          # 编译到 classes/（可用 JAVA8_HOME / IGV_JAR 环境变量指定 JDK8 与 igv.jar）
 python deploy.py <v5_base_jar> <target_igv.jar> <classes_dir>
 #   deploy.py：基于已知洁净的 v5 底座 jar 重建（注入 classes + 去签名 + 保留 builtin_plugin_list 注册）
 #   注：Python 重打包后的 jar 不能用 jar uf 增量更新，必须用 deploy.py 整体重建
@@ -63,14 +75,14 @@ python deploy.py <v5_base_jar> <target_igv.jar> <classes_dir>
 ```bash
 python install.py --package            # 打包本项目 -> PrimerPlugin.jar（仅含自研插件类，不含任何 IGV 类）
 python install.py <对方 igv.jar 路径>  # 给对方的 igv.jar 打补丁：自动备份 + 注入 + 去签名 + 写注册
-# 不传路径则自动探测常见位置（F:\zhaojing\IGV_2.3.80\...\lib、C:\Program Files\IGV\lib 等）或当前目录 igv.jar
+# 不传路径则自动探测常见位置（C:\Program Files\IGV\lib、/opt/igv/lib 等）或当前目录 igv.jar
 ```
 - 安装后对方重启 IGV 即自动加载 Primer 轨，**零额外操作**。
 - 卸载：用安装时生成的 `igv.jar.bak-<时间戳>` 覆盖回 igv.jar 即可。
 - 已 headless 验证：install.py 打补丁后的 jar 与现有改装 jar **完全等价**（注册一致 / 36 个插件类字节一致 / 签名已去 / 含 BoundedPopupMenu）。
 
 ## 回滚
-- 备份：`F:\zhaojing\_backup\igv.jar.bak-20260928` → 覆盖回 `lib\igv.jar` 即完全还原
+- 备份：安装器在 `igv.jar` 同目录生成 `igv.jar.bak-<时间戳>`，覆盖回 `igv.jar` 即完全还原。
 
 ## 已知限制
 1. Swing 拖拽无法 headless 验证，交互手感需本地 GUI 验收。坐标换算已统一走 IGV 权威 API `frame.getChromosomePosition()`（注意 getScale() 语义是"碱基/像素"）。
@@ -116,5 +128,5 @@ python install.py <对方 igv.jar 路径>  # 给对方的 igv.jar 打补丁：�
 ## 分发与许可（LICENSE）
 - 本插件基于 **IGV（MIT License, © Broad Institute & Regents of the University of California）** 开发，仅向 IGV 注入自研类文件。
 - **分发物仅为 `PrimerPlugin.jar` + `install.py`**，**不重新分发被修改签名的 Broad igv.jar 本身**；用户以自己合法取得的 IGV 运行安装器打补丁 —— 符合 IGV 的 MIT 许可。
-- 发布/分发时请随包附 IGV 的 MIT 许可原文（见 IGV 仓库 `license.txt`），并注明 "based on IGV (MIT)"。
+- 本仓库 `LICENSE` 为插件自身的 MIT 许可；基于 IGV 开发，分发时请保留 IGV 的 MIT 版权声明并注明 "based on IGV (MIT)"。
 - IGV MIT 要点：可修改、再分发、闭源、商用；**唯一硬义务是保留版权与许可声明**；不可冒充 Broad 官方出品。

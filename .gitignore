@@ -14,3 +14,6 @@ result.txt
 .DS_Store
 *.swp
 *~
+
+# Local project memory (not part of the distributed plugin)
+.workbuddy/

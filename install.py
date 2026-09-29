@@ -88,9 +88,9 @@ def find_igv_jar():
     for p in glob.glob(os.path.join(HERE, "**", "igv.jar"), recursive=True):
         cands.append(p)
     for base in [
-        r"F:\zhaojing\IGV_2.3.80\IGV_2.3.80_jre\lib",
         r"C:\Program Files\IGV\lib",
         r"C:\IGV\lib",
+        r"/opt/igv/lib",
     ]:
         c = os.path.join(base, "igv.jar")
         if os.path.exists(c):

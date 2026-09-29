@@ -1,5 +1,5 @@
 import zipfile, os, traceback
-orig = 'F:/zhaojing/IGV_2.3.80/IGV_2.3.80_jre/lib/igv.jar'
+orig = os.environ.get('IGV_JAR', '/opt/igv/lib/igv.jar')  # 用环境变量指定你的 IGV igv.jar 路径
 copy = '_test_igv.jar'
 plugin_jar = 'PrimerPlugin.jar'
 MARK = 'org.broad.igv.primer.PrimerPlugin'
