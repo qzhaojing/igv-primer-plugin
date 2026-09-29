@@ -398,7 +398,30 @@ public class PrimerStore {
     }
 
     /**
-     * v0.1.13：整套引物公用一套测序长度——按角色 R1/R2 分别赋值，并写入默认配置（新增引物沿用）。
+     * v0.1.14：仅对指定「套」（= 来源 BED 分组 Primer.group）生效的测序长度设置，按角色 R1/R2 分别赋值；
+     * 其他 BED 套不受影响，也不改动全局默认配置。group 为 null 表示"未分组（手动添加）"那一套。
+     * incLen=true 表示填写值含引物本身长度，实际延伸 = 填写值 - 引物长度（下限 0）。返回受影响条数。
+     */
+    public static synchronized int setReadLenForGroup(String group, int lenR1, int lenR2, boolean incLen) {
+        int v1 = Math.max(0, lenR1), v2 = Math.max(0, lenR2);
+        int cnt = 0;
+        for (Primer p : primers) {
+            String pg = p.group;
+            boolean match = (group == null) ? (pg == null) : group.equals(pg);
+            if (!match) continue;
+            int raw = "R1".equals(p.role) ? v1 : v2;
+            p.readLen = incLen ? Math.max(0, raw - (p.end - p.start)) : raw;
+            cnt++;
+        }
+        if (cnt > 0) {
+            refresh();
+            autosave(true);
+        }
+        return cnt;
+    }
+
+    /**
+     * v0.1.13：全部引物公用一套测序长度——按角色 R1/R2 分别赋值，并写入默认配置（新增引物沿用）。
      * incLen=true 表示填写值含引物本身长度，实际延伸 = 填写值 - 引物长度（下限 0）。
      */
     public static synchronized void setReadLenByRole(int lenR1, int lenR2, boolean incLen) {

@@ -161,6 +161,24 @@ public class PrimerTrack extends AbstractTrack {
         return len < 1000 ? len + " bp" : String.format("%.2f kb", len / 1000.0);
     }
 
+    /** v0.1.14：测序长度输入对话框，返回 {R1, R2, 含引物长度(1/0)}；取消返回 null。 */
+    private static int[] askReadLen(String title) {
+        JSpinner sp1 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadF, 0, 1000, 1));
+        JSpinner sp2 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadR, 0, 1000, 1));
+        JCheckBox cb = new JCheckBox("包含引物长度", PrimerStore.defaultIncludeLen);
+        JPanel pnl = new JPanel(new GridLayout(0, 2, 8, 6));
+        pnl.add(new JLabel("R1 测序长度 (nt)"));
+        pnl.add(sp1);
+        pnl.add(new JLabel("R2 测序长度 (nt)"));
+        pnl.add(sp2);
+        pnl.add(new JLabel("口径"));
+        pnl.add(cb);
+        int r = JOptionPane.showConfirmDialog(null, pnl, title,
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return null;
+        return new int[]{(Integer) sp1.getValue(), (Integer) sp2.getValue(), cb.isSelected() ? 1 : 0};
+    }
+
     private int rowY(Rectangle rect, int row) {
         return rect.y + 4 + Math.max(0, row) * ROW_H;
     }
@@ -559,27 +577,27 @@ public class PrimerTrack extends AbstractTrack {
                 }
             }
         }));
-        // v0.1.13：整套引物公用一套测序长度（R1/R2 分开设定，并写入默认配置，新增引物沿用）
-        batchMenu.add(item("设置全套测序长度 (R1/R2)...", new Runnable() {
+        // v0.1.14：按「套」设置——右键命中引物时只作用于该引物所属 BED 套，其他套不受影响
+        final String grp = hit != null ? hit.group : null;
+        final String grpLabel = (hit != null && hit.group != null) ? hit.group : "未分组(手动添加)";
+        batchMenu.add(item("设置本套测序长度 (R1/R2)... [" + grpLabel + "]", new Runnable() {
             public void run() {
-                JSpinner sp1 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadF, 0, 1000, 1));
-                JSpinner sp2 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadR, 0, 1000, 1));
-                JCheckBox cb = new JCheckBox("包含引物长度", PrimerStore.defaultIncludeLen);
-                JPanel pnl = new JPanel(new GridLayout(0, 2, 8, 6));
-                pnl.add(new JLabel("R1 测序长度 (nt)"));
-                pnl.add(sp1);
-                pnl.add(new JLabel("R2 测序长度 (nt)"));
-                pnl.add(sp2);
-                pnl.add(new JLabel("口径"));
-                pnl.add(cb);
-                int r = JOptionPane.showConfirmDialog(null, pnl, "设置全套测序长度",
-                        JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-                if (r != JOptionPane.OK_OPTION) return;
-                int l1 = (Integer) sp1.getValue();
-                int l2 = (Integer) sp2.getValue();
-                PrimerStore.setReadLenByRole(l1, l2, cb.isSelected());
-                JOptionPane.showMessageDialog(null, "已将全部引物测序长度设为 R1=" + l1 + " nt, R2=" + l2
-                        + " nt（含引物长度=" + cb.isSelected() + "），并写入默认配置，新增引物自动沿用。");
+                int[] v = askReadLen("设置本套测序长度 - " + grpLabel);
+                if (v == null) return;
+                int n = PrimerStore.setReadLenForGroup(grp, v[0], v[1], v[2] == 1);
+                JOptionPane.showMessageDialog(null, n > 0
+                        ? "已将「" + grpLabel + "」共 " + n + " 条引物设为 R1=" + v[0] + " nt, R2=" + v[1]
+                        + " nt（含引物长度=" + (v[2] == 1) + "）。其他 BED 套不受影响。"
+                        : "未找到属于「" + grpLabel + "」的引物。");
+            }
+        }));
+        batchMenu.add(item("设置【全部引物】测序长度 (R1/R2)...", new Runnable() {
+            public void run() {
+                int[] v = askReadLen("设置全部引物测序长度");
+                if (v == null) return;
+                PrimerStore.setReadLenByRole(v[0], v[1], v[2] == 1);
+                JOptionPane.showMessageDialog(null, "已将全部引物测序长度设为 R1=" + v[0] + " nt, R2=" + v[1]
+                        + " nt（含引物长度=" + (v[2] == 1) + "），并写入默认配置，新增引物自动沿用。");
             }
         }));
         menu.add(batchMenu);

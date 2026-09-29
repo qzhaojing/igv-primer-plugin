@@ -100,17 +100,18 @@ public class AddPrimerDialog {
                     PrimerStore.defaultLen = en - s;
                     PrimerStore.defaultStrand = strand;
                     PrimerStore.defaultRole = role;
-                    PrimerStore.defaultReadF = rf;
-                    PrimerStore.defaultReadR = rr;
+                    // v0.1.14：不再用单条引物的填写值覆盖公共默认测序长度（避免 R1/R2 默认值逐条漂移）；
+                    // 公共长度只由右键「本套/全部」或"保存配置"改变，单条设置仅作用于当前引物。
 
                     int raw = "R1".equals(role) ? rf : rr;
                     // v8：勾选"包含引物长度" → 实际延伸 = 填写值 - 引物长度（下限 0）
                     int readLen = incLen.isSelected() ? Math.max(0, raw - (en - s)) : raw;
-                    PrimerStore.defaultIncludeLen = incLen.isSelected();
 
                     if (existing == null) {
                         Primer p = new Primer(name, chr, s, en, strand, role, readLen, ampliconId);
                         p.pairWith = pairText.isEmpty() ? null : pairText;
+                        // v0.1.14：新引物归入当前选中引物所属「套」，便于按套批量设置
+                        p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
                         PrimerStore.add(p);
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
                         PrimerStore.evaluatePairs();
@@ -177,6 +178,8 @@ public class AddPrimerDialog {
         // v0.1.13：起点（左端）对齐鼠标坐标
         Primer p = new Primer(PrimerStore.nextName(), chr, bp, bp + PrimerStore.defaultLen,
                 PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, PrimerStore.nextAmplicon());
+        // v0.1.14：归入当前选中引物所属「套」
+        p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
         PrimerStore.add(p);
         PrimerStore.evaluatePairs();
         PrimerStore.refresh();
