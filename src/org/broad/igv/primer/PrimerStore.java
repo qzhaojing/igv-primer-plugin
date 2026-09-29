@@ -286,6 +286,17 @@ public class PrimerStore {
         clearPair(p);
     }
 
+    /** v0.1.7：解除 p 的全部配对（同组成员同时散组，双向清 pairWith）；无配对静默返回。
+     *  语义：删除其中一条的配对，另一条与它的配对必须同时清除。 */
+    public static synchronized void unpairAllFor(Primer p) {
+        if (p == null) return;
+        if (p.ampliconId == null) return;   // 无配对：静默忽略
+        unpairAll(p);
+        evaluatePairs();
+        refresh();
+        autosave(true);
+    }
+
     private static void clearPair(Primer p) {
         p.ampliconId = null;
         p.pairWith = null;

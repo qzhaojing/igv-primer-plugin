@@ -338,13 +338,15 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
         Primer hit = findPrimerAt(x, y, chr);
 
-        // v0.1.2 Ctrl+点击 = 快捷配对；Ctrl+Shift+点击 = 取消配对（针对当前选中引物）
+        // v0.1.7 Ctrl+点击 = 快捷配对（选中引物 ↔ 点击引物）
+        //        Ctrl+Shift+点击 = 解除点击引物的全部配对（对方同时清除；无配对静默）
         // 命中引物时拦截，不进入拖拽流程；未选中引物时 Ctrl+点击仅选中
         if (hit != null && e.isControlDown()) {
-            Primer sel = PrimerStore.selected;
-            if (sel != null && sel != hit) {
-                if (e.isShiftDown()) PrimerStore.unpairPrimer(sel, hit);
-                else PrimerStore.pairPrimer(sel, hit);
+            if (e.isShiftDown()) {
+                PrimerStore.unpairAllFor(hit);
+            } else {
+                Primer sel = PrimerStore.selected;
+                if (sel != null && sel != hit) PrimerStore.pairPrimer(sel, hit);
             }
             PrimerStore.selected = hit;
             dp.repaint();
