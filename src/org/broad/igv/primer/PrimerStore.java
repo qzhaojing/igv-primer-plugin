@@ -224,6 +224,62 @@ public class PrimerStore {
         return sb.toString();
     }
 
+    // ---------- Ctrl+点击 快捷配对（v0.1.2） ----------
+
+    /**
+     * 把 a 与 b 直接连成一对（Ctrl+点击）：
+     *  - 双方各自的既有配对先解除（保证一对一，避免出现串线的大组）；
+     *  - 分配新 ampliconId，双向写 pairWith（随 BED 导出/导入复原）。
+     */
+    public static synchronized void pairPrimer(Primer a, Primer b) {
+        if (a == null || b == null || a == b) return;
+        unpairAll(a);
+        unpairAll(b);
+        String aid = nextAmplicon();
+        a.ampliconId = aid;
+        b.ampliconId = aid;
+        a.pairWith = b.name;
+        b.pairWith = a.name;
+        evaluatePairs();
+        refresh();
+        autosave(true);
+    }
+
+    /**
+     * 取消 a 与 b 之间的配对（Ctrl+Shift+点击）：
+     *  - 两者不同组或均未配对 → 静默忽略，不报错；
+     *  - 同组 size==2 → 双方都散组；size>2 → a、b 移出，其余成员保留原组。
+     */
+    public static synchronized void unpairPrimer(Primer a, Primer b) {
+        if (a == null || b == null || a == b) return;
+        if (a.ampliconId == null || !a.ampliconId.equals(b.ampliconId)) return; // 无配对：忽略
+        List<Primer> members = new ArrayList<Primer>();
+        for (Primer q : primers) if (a.ampliconId.equals(q.ampliconId)) members.add(q);
+        clearPair(a);
+        clearPair(b);
+        if (members.size() - 2 < 2) {
+            for (Primer q : members) clearPair(q);   // 剩余不足 2 条 → 整组散开
+        }
+        evaluatePairs();
+        refresh();
+        autosave(true);
+    }
+
+    /** 解除 p 参与的所有配对：同组其他成员全部散组，双向清 pairWith。 */
+    private static void unpairAll(Primer p) {
+        if (p.ampliconId != null) {
+            for (Primer q : primers) {
+                if (q != p && p.ampliconId.equals(q.ampliconId)) clearPair(q);
+            }
+        }
+        clearPair(p);
+    }
+
+    private static void clearPair(Primer p) {
+        p.ampliconId = null;
+        p.pairWith = null;
+    }
+
     // ---------- 默认参数持久化（~/.igv_primer_defaults.properties） ----------
 
     private static File configFile() {

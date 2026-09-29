@@ -337,6 +337,20 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         panning = false;
 
         Primer hit = findPrimerAt(x, y, chr);
+
+        // v0.1.2 Ctrl+点击 = 快捷配对；Ctrl+Shift+点击 = 取消配对（针对当前选中引物）
+        // 命中引物时拦截，不进入拖拽流程；未选中引物时 Ctrl+点击仅选中
+        if (hit != null && e.isControlDown()) {
+            Primer sel = PrimerStore.selected;
+            if (sel != null && sel != hit) {
+                if (e.isShiftDown()) PrimerStore.unpairPrimer(sel, hit);
+                else PrimerStore.pairPrimer(sel, hit);
+            }
+            PrimerStore.selected = hit;
+            dp.repaint();
+            return;
+        }
+
         if (hit != null) {
             java.awt.Rectangle r = PrimerStore.screenRects.get(hit);
             int xl = r.x;
