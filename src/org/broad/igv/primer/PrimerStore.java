@@ -65,6 +65,7 @@ public class PrimerStore {
     public static synchronized void remove(Primer p) {
         primers.remove(p);
         if (selected == p) selected = null;
+        cleanOrphanPairs();   // 被删引物的原配对组若只剩 1 条，散组防悬空
         refresh();
         autosave(true);
     }
@@ -295,6 +296,20 @@ public class PrimerStore {
         evaluatePairs();
         refresh();
         autosave(true);
+    }
+
+    /** v0.1.9：把 p 从当前配对组中摘出（清 p 的 ampliconId/pairWith）；
+     *  若原组剩余不足 2 条，剩余成员一并散组。用于编辑框重设配对前先脱离旧组。 */
+    public static synchronized void detach(Primer p) {
+        if (p == null || p.ampliconId == null) return;
+        List<Primer> rest = new ArrayList<Primer>();
+        for (Primer q : primers) {
+            if (q != p && p.ampliconId.equals(q.ampliconId)) rest.add(q);
+        }
+        clearPair(p);
+        if (rest.size() < 2) {
+            for (Primer q : rest) clearPair(q);
+        }
     }
 
     private static void clearPair(Primer p) {

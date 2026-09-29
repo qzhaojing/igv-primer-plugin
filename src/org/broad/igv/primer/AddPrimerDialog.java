@@ -122,7 +122,9 @@ public class AddPrimerDialog {
                         existing.role = role;
                         existing.readLen = readLen;
                         existing.pairWith = pairText.isEmpty() ? null : pairText;
-                        PrimerStore.linkByNames(existing, pairNames);
+                        // v0.1.9：先脱离旧配对组再按填写内容重连——否则清空/改名后 ampliconId 仍残留，配对取消不掉
+                        PrimerStore.detach(existing);
+                        if (pairNames.length > 0) PrimerStore.linkByNames(existing, pairNames);
                         PrimerStore.refreshSequence(existing);
                         PrimerStore.evaluatePairs();
                     }
