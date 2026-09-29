@@ -559,21 +559,27 @@ public class PrimerTrack extends AbstractTrack {
                 }
             }
         }));
-        batchMenu.add(item("设置全部 readLen...", new Runnable() {
+        // v0.1.13：整套引物公用一套测序长度（R1/R2 分开设定，并写入默认配置，新增引物沿用）
+        batchMenu.add(item("设置全套测序长度 (R1/R2)...", new Runnable() {
             public void run() {
-                String s = JOptionPane.showInputDialog(null, "设置全部引物的测序读段长度 (nt):", "150");
-                if (s == null) return;
-                try {
-                    int len = Integer.parseInt(s.trim());
-                    if (len <= 0) {
-                        JOptionPane.showMessageDialog(null, "长度必须为正整数。");
-                        return;
-                    }
-                    PrimerStore.setAllReadLen(len);
-                    JOptionPane.showMessageDialog(null, "已将全部引物 readLen 设为 " + len + " nt。");
-                } catch (NumberFormatException ex) {
-                    JOptionPane.showMessageDialog(null, "请输入有效的整数。");
-                }
+                JSpinner sp1 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadF, 0, 1000, 1));
+                JSpinner sp2 = new JSpinner(new SpinnerNumberModel(PrimerStore.defaultReadR, 0, 1000, 1));
+                JCheckBox cb = new JCheckBox("包含引物长度", PrimerStore.defaultIncludeLen);
+                JPanel pnl = new JPanel(new GridLayout(0, 2, 8, 6));
+                pnl.add(new JLabel("R1 测序长度 (nt)"));
+                pnl.add(sp1);
+                pnl.add(new JLabel("R2 测序长度 (nt)"));
+                pnl.add(sp2);
+                pnl.add(new JLabel("口径"));
+                pnl.add(cb);
+                int r = JOptionPane.showConfirmDialog(null, pnl, "设置全套测序长度",
+                        JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+                if (r != JOptionPane.OK_OPTION) return;
+                int l1 = (Integer) sp1.getValue();
+                int l2 = (Integer) sp2.getValue();
+                PrimerStore.setReadLenByRole(l1, l2, cb.isSelected());
+                JOptionPane.showMessageDialog(null, "已将全部引物测序长度设为 R1=" + l1 + " nt, R2=" + l2
+                        + " nt（含引物长度=" + cb.isSelected() + "），并写入默认配置，新增引物自动沿用。");
             }
         }));
         menu.add(batchMenu);

@@ -23,8 +23,9 @@ public class AddPrimerDialog {
 
         final JTextField nameF = new JTextField(existing == null ? PrimerStore.nextName() : existing.name, 10);
         final JTextField chrF = new JTextField(existing == null ? currentChr() : existing.chr, 12);
-        final JTextField startF = new JTextField(String.valueOf(existing == null ? bp - PrimerStore.defaultLen / 2 : existing.start), 10);
-        final JTextField endF = new JTextField(String.valueOf(existing == null ? bp + PrimerStore.defaultLen / 2 : existing.end), 10);
+        // v0.1.13：新增引物时起点（左端）对齐鼠标坐标，终点 = 起点 + 默认引物长度
+        final JTextField startF = new JTextField(String.valueOf(existing == null ? bp : existing.start), 10);
+        final JTextField endF = new JTextField(String.valueOf(existing == null ? bp + PrimerStore.defaultLen : existing.end), 10);
         final JComboBox strandC = new JComboBox(new Object[]{"+ (F)", "- (R)"});
         if (existing != null) strandC.setSelectedIndex(existing.strand == '-' ? 1 : 0);
         else strandC.setSelectedIndex(PrimerStore.defaultStrand == '-' ? 1 : 0);
@@ -171,10 +172,10 @@ public class AddPrimerDialog {
     public static void quickAdd(int bp) {
         String chr = currentChr();
         if (chr == null) return;
-        int half = PrimerStore.defaultLen / 2;
         int raw = "R1".equals(PrimerStore.defaultRole) ? PrimerStore.defaultReadF : PrimerStore.defaultReadR;
         int readLen = PrimerStore.defaultIncludeLen ? Math.max(0, raw - PrimerStore.defaultLen) : raw;
-        Primer p = new Primer(PrimerStore.nextName(), chr, bp - half, bp + half,
+        // v0.1.13：起点（左端）对齐鼠标坐标
+        Primer p = new Primer(PrimerStore.nextName(), chr, bp, bp + PrimerStore.defaultLen,
                 PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, PrimerStore.nextAmplicon());
         PrimerStore.add(p);
         PrimerStore.evaluatePairs();

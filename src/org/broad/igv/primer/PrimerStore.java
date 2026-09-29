@@ -397,6 +397,24 @@ public class PrimerStore {
         autosave(true);
     }
 
+    /**
+     * v0.1.13：整套引物公用一套测序长度——按角色 R1/R2 分别赋值，并写入默认配置（新增引物沿用）。
+     * incLen=true 表示填写值含引物本身长度，实际延伸 = 填写值 - 引物长度（下限 0）。
+     */
+    public static synchronized void setReadLenByRole(int lenR1, int lenR2, boolean incLen) {
+        int v1 = Math.max(0, lenR1), v2 = Math.max(0, lenR2);
+        for (Primer p : primers) {
+            int raw = "R1".equals(p.role) ? v1 : v2;
+            p.readLen = incLen ? Math.max(0, raw - (p.end - p.start)) : raw;
+        }
+        defaultReadF = v1;
+        defaultReadR = v2;
+        defaultIncludeLen = incLen;
+        saveDefaults(defaultLen, defaultStrand, defaultRole, defaultReadF, defaultReadR, defaultIncludeLen);
+        refresh();
+        autosave(true);
+    }
+
     /** 清理孤立配对：组内仅剩 1 条成员的 ampliconId 失去意义，清掉其 ampliconId/pairWith。 */
     private static void cleanOrphanPairs() {
         java.util.Map<String, Integer> counts = new java.util.HashMap<String, Integer>();
