@@ -189,7 +189,8 @@ public class PrimerStore {
     }
 
     /** 按名称列表配对：p + 所有同名引物共享一个配对组 ID（支持一条引物配多条，即 1:N）。
-     *  优先并入任一伙伴已有的组（复用其 ID）；若伙伴均无组，则复用 p 的组 ID 或生成新组。 */
+     *  优先并入任一伙伴已有的组（复用其 ID）；若伙伴均无组，则复用 p 的组 ID 或生成新组。
+     *  v0.1.4：只接受与 p 异链（F/R 相对）的伙伴，同链引物直接跳过（避免出现不严谨的同链"配对"）。 */
     public static synchronized void linkByNames(Primer p, String[] names) {
         String gid = null;
         for (String nm : names) {
@@ -206,7 +207,7 @@ public class PrimerStore {
             nm = nm.trim();
             if (nm.isEmpty()) continue;
             for (Primer q : primers) {
-                if (q != p && nm.equals(q.name)) q.ampliconId = gid;
+                if (q != p && nm.equals(q.name) && q.strand != p.strand) q.ampliconId = gid;
             }
         }
     }
@@ -233,6 +234,16 @@ public class PrimerStore {
      */
     public static synchronized void pairPrimer(Primer a, Primer b) {
         if (a == null || b == null || a == b) return;
+        // v0.1.4：只允许 F(+) 与 R(-) 异链配对，同链拒绝（弹窗提示，不做任何改动）
+        if (a.strand == b.strand) {
+            String tag = a.strand == '+' ? "F(+)" : "R(-)";
+            javax.swing.JOptionPane.showMessageDialog(
+                    org.broad.igv.ui.IGV.getMainFrame(),
+                    "配对失败：" + a.name + " 与 " + b.name + " 同为 " + tag + " 链。\n"
+                            + "只允许 F(+) 与 R(-) 异链配对，请一条选正向引物、一条选反向引物。",
+                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         unpairAll(a);
         unpairAll(b);
         String aid = nextAmplicon();
