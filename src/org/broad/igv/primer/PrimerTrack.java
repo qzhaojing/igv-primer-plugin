@@ -85,7 +85,8 @@ public class PrimerTrack extends AbstractTrack {
                 int len = hi - lo;
                 g.setColor(Color.DARK_GRAY);
                 g.setFont(g.getFont().deriveFont(8f));
-                g.drawString((len / 1000.0) + " kb", (x1 + x2) / 2 - 10, y + 4);
+                // v0.1.3：PCR 产物长度（两端引物外沿跨度，含引物长度），画在线上方
+                g.drawString(formatLen(len), (x1 + x2) / 2 - 14, y - 4);
                 g.setFont(g.getFont().deriveFont(10f));
             } else {
                 // v8 曲线汇聚：hub = R2 角色（没有则取居中成员）；其余成员用二次贝塞尔曲线平滑汇聚到 hub
@@ -111,6 +112,11 @@ public class PrimerTrack extends AbstractTrack {
                     g.setStroke(new BasicStroke(sel ? 2.5f : 1.4f));
                     g.draw(new java.awt.geom.QuadCurve2D.Float(xS, yS, cx, cy, xHub, yHub));
                     g.setStroke(new BasicStroke(1f));
+                    // v0.1.3：每条 spoke 也标注 PCR 产物长度（含引物长度），画在曲线拱顶附近
+                    int len = Math.max(s.end, hub.end) - Math.min(s.start, hub.start);
+                    g.setFont(g.getFont().deriveFont(8f));
+                    g.setColor(c.darker());
+                    g.drawString(formatLen(len), cx - 12, cy - 2);
                     // 箭头指向 hub 侧（曲线终点附近）
                     drawDirArrow(g, xHub + (xS < xHub ? -6 : 6), yHub + (yS < yHub ? -4 : 4),
                             xS < xHub ? -1 : 1, c);
@@ -147,6 +153,11 @@ public class PrimerTrack extends AbstractTrack {
             new Color(255, 140, 0), new Color(150, 0, 200), new Color(0, 150, 160),
             new Color(200, 0, 120), new Color(130, 110, 0), new Color(0, 110, 200)
     };
+
+    /** v0.1.3：长度格式化 —— <1000 显示 "N bp"，否则 "x.xx kb" */
+    static String formatLen(int len) {
+        return len < 1000 ? len + " bp" : String.format("%.2f kb", len / 1000.0);
+    }
 
     private int rowY(Rectangle rect, int row) {
         return rect.y + 4 + Math.max(0, row) * ROW_H;
