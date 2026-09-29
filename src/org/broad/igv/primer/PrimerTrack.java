@@ -72,21 +72,23 @@ public class PrimerTrack extends AbstractTrack {
                 int x1 = ctx.bpToScreenPixel(lo), x2 = ctx.bpToScreenPixel(hi);
                 int ya = rowY(rect, rows.get(a)) + ARROW_H / 2;
                 int yb = rowY(rect, rows.get(b)) + ARROW_H / 2;
-                int y = (ya + yb) / 2;
                 g.setColor(sel ? new Color(80, 80, 80) : new Color(150, 150, 150));
                 if (sel) g.setStroke(new BasicStroke(2f));
-                g.drawLine(x1, y, x2, y);
+                // v0.1.10：恢复二次贝塞尔拱形连线（与多对一汇聚风格一致），控制点在两锚点中点上方拱起
+                int cx = (x1 + x2) / 2;
+                int cy = Math.min(ya, yb) - Math.max(14, Math.abs(ya - yb) / 3);
+                g.draw(new java.awt.geom.QuadCurve2D.Float(x1, ya, cx, cy, x2, yb));
                 if (sel) g.setStroke(new BasicStroke(1f));
                 boolean aLeft = a.start <= b.start;
                 Color ca = a.strand == '+' ? new Color(0, 150, 0) : new Color(0, 80, 220);
                 Color cb = b.strand == '+' ? new Color(0, 150, 0) : new Color(0, 80, 220);
-                drawDirArrow(g, aLeft ? x1 : x2, y, aLeft ? 1 : -1, ca);
-                drawDirArrow(g, aLeft ? x2 : x1, y, aLeft ? -1 : 1, cb);
+                drawDirArrow(g, x1, ya, aLeft ? 1 : -1, ca);
+                drawDirArrow(g, x2, yb, aLeft ? -1 : 1, cb);
                 int len = hi - lo;
                 g.setColor(Color.DARK_GRAY);
                 g.setFont(g.getFont().deriveFont(8f));
-                // v0.1.3：PCR 产物长度（两端引物外沿跨度，含引物长度），画在线上方
-                g.drawString(formatLen(len), (x1 + x2) / 2 - 14, y - 4);
+                // v0.1.3：PCR 产物长度（两端引物外沿跨度，含引物长度），画在拱顶上方
+                g.drawString(formatLen(len), cx - 14, cy - 2);
                 g.setFont(g.getFont().deriveFont(10f));
             } else {
                 // v8 曲线汇聚：hub = R2 角色（没有则取居中成员）；其余成员用二次贝塞尔曲线平滑汇聚到 hub
