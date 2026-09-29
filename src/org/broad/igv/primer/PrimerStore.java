@@ -287,6 +287,42 @@ public class PrimerStore {
         clearPair(p);
     }
 
+    /**
+     * v0.1.11：Ctrl+点击 增量配对（支持 1对多）：把 b 并入 a 所在配对组，不清除既有成员。
+     *  - 仅允许 F(+)/R(-) 异链，同链拒绝并提示；
+     *  - 若 a、b 各自已有不同配对组，则合并为同一组（实现 1v多 / 多v多 汇聚）；
+     *  - 双向写 pairWith（随 BED 导出/导入复原）。
+     */
+    public static synchronized void mergePair(Primer a, Primer b) {
+        if (a == null || b == null || a == b) return;
+        if (a.strand == b.strand) { warnSameStrand(a, b); return; }
+        String gid;
+        if (a.ampliconId != null && b.ampliconId != null && !a.ampliconId.equals(b.ampliconId)) {
+            String target = a.ampliconId;            // 合并 b 的组进 a 的组
+            for (Primer q : primers) if (b.ampliconId.equals(q.ampliconId)) q.ampliconId = target;
+            gid = target;
+        } else {
+            gid = (a.ampliconId != null) ? a.ampliconId
+                    : (b.ampliconId != null ? b.ampliconId : nextAmplicon());
+        }
+        a.ampliconId = gid;
+        b.ampliconId = gid;
+        a.pairWith = b.name;
+        b.pairWith = a.name;
+        evaluatePairs();
+        refresh();
+        autosave(true);
+    }
+
+    private static void warnSameStrand(Primer a, Primer b) {
+        String tag = a.strand == '+' ? "F(+)" : "R(-)";
+        javax.swing.JOptionPane.showMessageDialog(
+                org.broad.igv.ui.IGV.getMainFrame(),
+                "配对失败：" + a.name + " 与 " + b.name + " 同为 " + tag + " 链。\n"
+                        + "只允许 F(+) 与 R(-) 异链配对。",
+                "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
+    }
+
     /** v0.1.7：解除 p 的全部配对（同组成员同时散组，双向清 pairWith）；无配对静默返回。
      *  语义：删除其中一条的配对，另一条与它的配对必须同时清除。 */
     public static synchronized void unpairAllFor(Primer p) {

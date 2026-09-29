@@ -233,6 +233,17 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (keyListener != null) return;
         keyListener = new java.awt.event.AWTEventListener() {
             public void eventDispatched(java.awt.AWTEvent ev) {
+                // v0.1.11：Ctrl+点击 时吞掉 IGV 原生 pan/zoom 工具对鼠标事件的响应，只走插件配对逻辑
+                if (ev instanceof java.awt.event.MouseEvent) {
+                    java.awt.event.MouseEvent me = (java.awt.event.MouseEvent) ev;
+                    if (me.getID() == java.awt.event.MouseEvent.MOUSE_PRESSED
+                            && me.isControlDown()
+                            && PrimerEditTool.inEditMode()
+                            && me.getSource() instanceof org.broad.igv.ui.panel.DataPanel) {
+                        me.consume();
+                    }
+                    return;
+                }
                 if (!(ev instanceof java.awt.event.KeyEvent)) return;
                 java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
                 if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
@@ -271,7 +282,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             }
         };
         java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
-                keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
+                keyListener,
+                java.awt.AWTEvent.KEY_EVENT_MASK | java.awt.AWTEvent.MOUSE_EVENT_MASK);
     }
 
     private static void removeKeyboard() {
@@ -338,17 +350,24 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
         Primer hit = findPrimerAt(x, y, chr);
 
-        // v0.1.7 Ctrl+点击 = 快捷配对（选中引物 ↔ 点击引物）
-        //        Ctrl+Shift+点击 = 解除点击引物的全部配对（对方同时清除；无配对静默）
-        // 命中引物时拦截，不进入拖拽流程；未选中引物时 Ctrl+点击仅选中
+        // v0.1.7/v0.1.11 Ctrl+点击 = 增量配对（1对1 或 1对多）；Ctrl+Shift+点击 = 仅解除所点击引物的配对
+        // 命中引物时拦截，不进入拖拽流程
         if (hit != null && e.isControlDown()) {
             if (e.isShiftDown()) {
+                // 只清点击引物所在的配对组（其伙伴同清），其余引物配对完全不受影响
                 PrimerStore.unpairAllFor(hit);
+                PrimerStore.selected = hit;
             } else {
                 Primer sel = PrimerStore.selected;
-                if (sel != null && sel != hit) PrimerStore.pairPrimer(sel, hit);
+                if (sel == null || sel == hit) {
+                    PrimerStore.selected = hit;       // 首次点击只选定为锚点
+                } else {
+                    // 把点击引物并入锚点所在组（可连续 Ctrl+点击 多条 → 1v多，已配对的不会丢失）
+                    PrimerStore.mergePair(sel, hit);
+                    // 锚点保持选中，便于继续叠加
+                }
             }
-            PrimerStore.selected = hit;
+            e.consume();                              // 阻止 IGV 原生 pan/zoom 对 Ctrl 点击的响应
             dp.repaint();
             return;
         }
