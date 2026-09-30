@@ -22,6 +22,8 @@ public class AddPrimerDialog {
         gc.anchor = GridBagConstraints.WEST;
 
         final JTextField nameF = new JTextField(existing == null ? PrimerStore.nextName() : existing.name, 10);
+        final JLabel nameWarn = new JLabel("");
+        nameWarn.setForeground(Color.RED);
         final JTextField chrF = new JTextField(existing == null ? currentChr() : existing.chr, 12);
         // v0.1.13：新增引物时起点（左端）对齐鼠标坐标，终点 = 起点 + 默认引物长度
         final JTextField startF = new JTextField(String.valueOf(existing == null ? bp : existing.start), 10);
@@ -44,6 +46,7 @@ public class AddPrimerDialog {
 
         int row = 0;
         addRow(form, gc, row++, "名称", nameF);
+        addRow(form, gc, row++, "名称状态", nameWarn);
         addRow(form, gc, row++, "染色体", chrF);
         addRow(form, gc, row++, "起始(0-based)", startF);
         addRow(form, gc, row++, "终止(exclusive)", endF);
@@ -61,13 +64,36 @@ public class AddPrimerDialog {
             addRow(form, gc, row++, "", tip);
         }
 
-        JButton ok = new JButton(existing == null ? "添加" : "更新");
+        final JButton ok = new JButton(existing == null ? "添加" : "更新");
         JButton cancel = new JButton("取消");
         JButton saveCfg = new JButton("保存配置");
         JPanel btns = new JPanel();
         btns.add(ok);
         btns.add(cancel);
         btns.add(saveCfg);
+
+        // 名称实时校验：空 / 重名 → 提示并禁用「添加/更新」
+        final Runnable updateNameStatus = new Runnable() {
+            public void run() {
+                String n = nameF.getText().trim();
+                if (n.isEmpty()) {
+                    nameWarn.setText("名称不能为空");
+                    ok.setEnabled(false);
+                } else if (PrimerStore.hasName(n, existing)) {
+                    nameWarn.setText("名称重复");
+                    ok.setEnabled(false);
+                } else {
+                    nameWarn.setText("");
+                    ok.setEnabled(true);
+                }
+            }
+        };
+        nameF.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { updateNameStatus.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { updateNameStatus.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { updateNameStatus.run(); }
+        });
+        updateNameStatus.run();
 
         dlg.setLayout(new BorderLayout());
         dlg.add(form, BorderLayout.CENTER);
@@ -79,6 +105,14 @@ public class AddPrimerDialog {
             public void actionPerformed(java.awt.event.ActionEvent e) {
                 try {
                     String name = nameF.getText().trim();
+                    if (name.isEmpty()) {
+                        JOptionPane.showMessageDialog(dlg, "名称不能为空");
+                        return;
+                    }
+                    if (PrimerStore.hasName(name, existing)) {
+                        JOptionPane.showMessageDialog(dlg, "名称重复，无法保存");
+                        return;
+                    }
                     String chr = chrF.getText().trim();
                     int s = Integer.parseInt(startF.getText().trim());
                     int en = Integer.parseInt(endF.getText().trim());

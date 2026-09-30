@@ -404,14 +404,15 @@ public class PrimerTrack extends AbstractTrack {
         g.setColor(body);
         g.fill(arrow);
 
-        // fail 红框 / 选中高亮框
+        // 失败标记：仅把引物自身轮廓（箭头主体）描红，不画额外方框/椭圆环
         if (!p.pass) {
             g.setColor(Color.RED);
             g.setStroke(new BasicStroke(2f));
-            // v0.1.15：失败标记由方框改为环绕引物外围一圈的椭圆
-            g.draw(new java.awt.geom.Ellipse2D.Float(x0 - 4, y - 5, w + 8, h + 10));
+            g.draw(arrow);
             g.setStroke(new BasicStroke(1f));
-        } else if (PrimerStore.selected == p) {
+        }
+        // 选中高亮橙框（与失败红描边共存不冲突）
+        if (PrimerStore.selected == p) {
             g.setColor(Color.ORANGE);
             g.drawRect(x0 - 2, y - 3, w + 4, h + 8);
         }
@@ -527,6 +528,12 @@ public class PrimerTrack extends AbstractTrack {
                     PrimerStore.refreshSequence(hit);
                     PrimerStore.evaluatePairs();
                     PrimerStore.refresh();
+                }
+            }));
+            // v0.1.16：复制选定引物——原引物正下方生成同款，名称末位数字+1
+            menu.add(item("复制选定引物（下方生成）", new Runnable() {
+                public void run() {
+                    PrimerStore.duplicate(hit);
                 }
             }));
             // v8：颜色一行 12 常用色，点击即换该引物颜色

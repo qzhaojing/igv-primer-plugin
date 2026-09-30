@@ -178,6 +178,57 @@ public class PrimerStore {
         return String.format("P%03d", max + 1);
     }
 
+    /** 是否存在同名引物；exclude 非空时排除它（编辑自身名称不算重复） */
+    public static synchronized boolean hasName(String name) {
+        return hasName(name, null);
+    }
+
+    public static synchronized boolean hasName(String name, Primer exclude) {
+        if (name == null) return false;
+        for (Primer p : primers) {
+            if (p == exclude) continue;
+            if (name.equals(p.name)) return true;
+        }
+        return false;
+    }
+
+    /** 名称末位数字 +1（无数字则追加 1）；保留原数字位数（前补 0）。例：P001→P002、A12B3→A12B4、primer→primer1 */
+    public static String incrementTrailingNumber(String s) {
+        int i = s.length() - 1;
+        while (i >= 0 && !Character.isDigit(s.charAt(i))) i--;
+        if (i < 0) return s + "1";
+        int j = i;
+        while (j >= 0 && Character.isDigit(s.charAt(j))) j--;
+        j++;
+        String prefix = s.substring(0, j);
+        String digits = s.substring(j, i + 1);
+        int val = Integer.parseInt(digits) + 1;
+        String fmt = String.format("%0" + digits.length() + "d", val);
+        return prefix + fmt;
+    }
+
+    /** 在原名称末位数字 +1 基础上，循环避开已存在同名，返回唯一名称 */
+    public static synchronized String uniqueIncrementedName(String base) {
+        String n = incrementTrailingNumber(base);
+        while (hasName(n)) n = incrementTrailingNumber(n);
+        return n;
+    }
+
+    /** v0.1.16：复制选定引物——在原引物正下方生成同款副本（名称末位数字+1），独立、不并入原配对组 */
+    public static synchronized void duplicate(Primer src) {
+        if (src == null) return;
+        Primer c = src.copy();
+        c.ampliconId = null;   // 复制体独立，不污染原配对组连线
+        c.pairWith = null;
+        c.name = uniqueIncrementedName(src.name);
+        Integer r = screenRows.get(src);
+        c.rowOverride = (r == null) ? null : (r + 1);   // 紧贴原引物下方一行
+        primers.add(c);
+        refreshSequence(c);
+        refresh();
+        autosave(true);
+    }
+
     private static int groupSeq = 0;
     public static synchronized String nextAmplicon() {
         return "G" + (++groupSeq);
