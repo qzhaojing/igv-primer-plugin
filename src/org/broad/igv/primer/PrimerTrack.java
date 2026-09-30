@@ -86,9 +86,11 @@ public class PrimerTrack extends AbstractTrack {
                 drawDirArrow(g, x2, yb, aLeft ? -1 : 1, cb);
                 int len = hi - lo;
                 g.setColor(Color.DARK_GRAY);
-                g.setFont(g.getFont().deriveFont(8f));
-                // v0.1.3：PCR 产物长度（两端引物外沿跨度，含引物长度），画在拱顶上方
-                g.drawString(formatLen(len), cx - 14, cy - 2);
+                g.setFont(g.getFont().deriveFont(11f));
+                // v0.1.15：PCR 产物长度放大并移到曲线下方（原在拱顶上方易被轨道顶边裁掉），水平居中
+                String lenTxt = formatLen(len);
+                g.drawString(lenTxt, cx - g.getFontMetrics(g.getFont()).stringWidth(lenTxt) / 2,
+                        Math.max(ya, yb) + ARROW_H + 2);
                 g.setFont(g.getFont().deriveFont(10f));
             } else {
                 // v8 曲线汇聚：hub = R2 角色（没有则取居中成员）；其余成员用二次贝塞尔曲线平滑汇聚到 hub
@@ -114,11 +116,13 @@ public class PrimerTrack extends AbstractTrack {
                     g.setStroke(new BasicStroke(sel ? 2.5f : 1.4f));
                     g.draw(new java.awt.geom.QuadCurve2D.Float(xS, yS, cx, cy, xHub, yHub));
                     g.setStroke(new BasicStroke(1f));
-                    // v0.1.3：每条 spoke 也标注 PCR 产物长度（含引物长度），画在曲线拱顶附近
+                    // v0.1.15：每条 spoke 标注 PCR 产物长度，放大并移到曲线下方，水平居中
                     int len = Math.max(s.end, hub.end) - Math.min(s.start, hub.start);
-                    g.setFont(g.getFont().deriveFont(8f));
+                    g.setFont(g.getFont().deriveFont(11f));
                     g.setColor(c.darker());
-                    g.drawString(formatLen(len), cx - 12, cy - 2);
+                    String slen = formatLen(len);
+                    g.drawString(slen, cx - g.getFontMetrics(g.getFont()).stringWidth(slen) / 2,
+                            Math.max(yS, yHub) + ARROW_H + 2);
                     // 箭头指向 hub 侧（曲线终点附近）
                     drawDirArrow(g, xHub + (xS < xHub ? -6 : 6), yHub + (yS < yHub ? -4 : 4),
                             xS < xHub ? -1 : 1, c);
@@ -177,6 +181,57 @@ public class PrimerTrack extends AbstractTrack {
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return null;
         return new int[]{(Integer) sp1.getValue(), (Integer) sp2.getValue(), cb.isSelected() ? 1 : 0};
+    }
+
+    /** v0.1.15：失败判定阈值设置对话框（右键菜单进入；应用到全部引物并持久化） */
+    private static void showFailConfigDialog() {
+        java.util.function.Function<String, JTextField> tf = (t) -> {
+            JTextField f = new JTextField(t);
+            f.setColumns(7);
+            return f;
+        };
+        JTextField lenMin = tf.apply(String.valueOf(PrimerStore.failLenMin));
+        JTextField lenMax = tf.apply(String.valueOf(PrimerStore.failLenMax));
+        JTextField tmMin = tf.apply(String.valueOf(PrimerStore.failTmMin));
+        JTextField tmMax = tf.apply(String.valueOf(PrimerStore.failTmMax));
+        JTextField gcMin = tf.apply(String.valueOf(PrimerStore.failGcMin));
+        JTextField gcMax = tf.apply(String.valueOf(PrimerStore.failGcMax));
+        JTextField hair = tf.apply(String.valueOf(PrimerStore.failHairpinTh));
+        JTextField self = tf.apply(String.valueOf(PrimerStore.failSelfTh));
+        JTextField h3 = tf.apply(String.valueOf(PrimerStore.failHetero3pTh));
+        JTextField hdg = tf.apply(String.valueOf(PrimerStore.failHeteroDgTh));
+        JPanel p = new JPanel(new java.awt.GridLayout(0, 2, 6, 4));
+        p.add(new JLabel("长度下限 (nt)"));            p.add(lenMin);
+        p.add(new JLabel("长度上限 (nt)"));            p.add(lenMax);
+        p.add(new JLabel("Tm 下限 (℃)"));             p.add(tmMin);
+        p.add(new JLabel("Tm 上限 (℃)"));             p.add(tmMax);
+        p.add(new JLabel("GC 下限 (%)"));              p.add(gcMin);
+        p.add(new JLabel("GC 上限 (%)"));              p.add(gcMax);
+        p.add(new JLabel("hairpin ΔG 阈值 (≤即失败)")); p.add(hair);
+        p.add(new JLabel("self-dimer ΔG 阈值 (≤即失败)")); p.add(self);
+        p.add(new JLabel("配对 3' 互补阈值 (≥即失败)")); p.add(h3);
+        p.add(new JLabel("配对二聚体 ΔG 阈值 (≤即失败)")); p.add(hdg);
+        int r = JOptionPane.showConfirmDialog(null, p, "设置失败判定条件",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+        try {
+            PrimerStore.failLenMin = Integer.parseInt(lenMin.getText().trim());
+            PrimerStore.failLenMax = Integer.parseInt(lenMax.getText().trim());
+            PrimerStore.failTmMin = Double.parseDouble(tmMin.getText().trim());
+            PrimerStore.failTmMax = Double.parseDouble(tmMax.getText().trim());
+            PrimerStore.failGcMin = Double.parseDouble(gcMin.getText().trim());
+            PrimerStore.failGcMax = Double.parseDouble(gcMax.getText().trim());
+            PrimerStore.failHairpinTh = Double.parseDouble(hair.getText().trim());
+            PrimerStore.failSelfTh = Double.parseDouble(self.getText().trim());
+            PrimerStore.failHetero3pTh = Integer.parseInt(h3.getText().trim());
+            PrimerStore.failHeteroDgTh = Double.parseDouble(hdg.getText().trim());
+            PrimerStore.saveFailConfig();
+            PrimerStore.refreshAll();
+            JOptionPane.showMessageDialog(null, "已更新失败判定条件，并重新评估全部引物。");
+        } catch (NumberFormatException ex) {
+            JOptionPane.showMessageDialog(null, "输入格式错误，未保存：" + ex.getMessage(),
+                    "格式错误", JOptionPane.ERROR_MESSAGE);
+        }
     }
 
     private int rowY(Rectangle rect, int row) {
@@ -353,7 +408,8 @@ public class PrimerTrack extends AbstractTrack {
         if (!p.pass) {
             g.setColor(Color.RED);
             g.setStroke(new BasicStroke(2f));
-            g.drawRect(x0 - 2, y - 3, w + 4, h + 8);
+            // v0.1.15：失败标记由方框改为环绕引物外围一圈的椭圆
+            g.draw(new java.awt.geom.Ellipse2D.Float(x0 - 4, y - 5, w + 8, h + 10));
             g.setStroke(new BasicStroke(1f));
         } else if (PrimerStore.selected == p) {
             g.setColor(Color.ORANGE);
@@ -362,7 +418,7 @@ public class PrimerTrack extends AbstractTrack {
 
         // 单行星号标签（引物下方，节省纵向空间）：名称 + 方向 + Tm/GC + 测序长度
         g.setColor(p.pass ? Color.DARK_GRAY : Color.RED);
-        g.setFont(g.getFont().deriveFont(9f));
+        g.setFont(g.getFont().deriveFont(11f));
         String label = p.name + " " + (p.strand == '+' ? "F" : "R")
                 + " Tm" + String.format("%.0f", p.tm) + " GC" + String.format("%.0f", p.gc)
                 + (p.readLen > 0 ? " " + (p.strand == '+' ? "R1+" : "R2-") + p.readLen + "nt" : "");
@@ -522,6 +578,13 @@ public class PrimerTrack extends AbstractTrack {
             }
         });
         menu.add(seqItem);
+
+        // v0.1.15：失败判定阈值设置入口
+        menu.add(item("设置失败判定阈值...", new Runnable() {
+            public void run() {
+                showFailConfigDialog();
+            }
+        }));
 
         // v9：自动保存开关 + 恢复（IGV session 不保存插件轨，用它兜底防丢失）
         final JCheckBoxMenuItem asItem = new JCheckBoxMenuItem("自动保存引物（防丢失）", PrimerStore.autosaveEnabled);

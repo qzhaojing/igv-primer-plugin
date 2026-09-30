@@ -42,6 +42,15 @@ public class PrimerStore {
     public static int defaultReadR = 0;
     public static boolean defaultIncludeLen = false;  // 测序长度是否包含引物长度
 
+    // 失败判定阈值（v0.1.15：右键菜单"设置失败判定阈值"可改；evaluate 与 evaluatePairs 共用，写入默认配置文件）
+    public static int failLenMin = 18, failLenMax = 30;        // 引物长度 (nt)
+    public static double failTmMin = 55, failTmMax = 65;       // Tm (℃)
+    public static double failGcMin = 30, failGcMax = 75;       // GC (%)
+    public static double failHairpinTh = -3.5;                 // hairpin ΔG <= 此值 判为强
+    public static double failSelfTh = -5.0;                    // self-dimer ΔG <= 此值 判为强
+    public static int failHetero3pTh = 4;                      // 配对 3' 互补 >= 此值 判二聚体
+    public static double failHeteroDgTh = -5.0;                // 配对二聚体 ΔG <= 此值 判二聚体
+
     static {
         loadDefaults();
     }
@@ -137,7 +146,7 @@ public class PrimerStore {
                 a.max3pComp = Math.max(a.max3pComp, c3);
                 b.heteroDG = Math.min(b.heteroDG, dg);
                 b.max3pComp = Math.max(b.max3pComp, c3);
-                if (c3 >= 4 || dg <= -5.0) {
+                if (c3 >= failHetero3pTh || dg <= failHeteroDgTh) {
                     flag(a, "二聚体(3'comp=" + c3 + ")");
                     flag(b, "二聚体(3'comp=" + c3 + ")");
                 }
@@ -481,6 +490,30 @@ public class PrimerStore {
         }
     }
 
+    /** v0.1.15：把当前失败判定阈值写回默认配置文件（read-modify-write，不破坏其他 key）。 */
+    public static void saveFailConfig() {
+        try {
+            Properties props = new Properties();
+            File f = configFile();
+            if (f.exists()) {
+                FileReader fr = new FileReader(f);
+                try { props.load(fr); } finally { fr.close(); }
+            }
+            props.setProperty("fail.lenMin", String.valueOf(failLenMin));
+            props.setProperty("fail.lenMax", String.valueOf(failLenMax));
+            props.setProperty("fail.tmMin", String.valueOf(failTmMin));
+            props.setProperty("fail.tmMax", String.valueOf(failTmMax));
+            props.setProperty("fail.gcMin", String.valueOf(failGcMin));
+            props.setProperty("fail.gcMax", String.valueOf(failGcMax));
+            props.setProperty("fail.hairpinTh", String.valueOf(failHairpinTh));
+            props.setProperty("fail.selfTh", String.valueOf(failSelfTh));
+            props.setProperty("fail.hetero3pTh", String.valueOf(failHetero3pTh));
+            props.setProperty("fail.heteroDgTh", String.valueOf(failHeteroDgTh));
+            props.store(new FileWriter(f), "IGV primer designer defaults");
+        } catch (Exception ignore) {
+        }
+    }
+
     public static void loadDefaults() {
         try {
             File f = configFile();
@@ -494,6 +527,16 @@ public class PrimerStore {
             if (props.containsKey("readR")) defaultReadR = Integer.parseInt(props.getProperty("readR"));
             if (props.containsKey("includeLen")) defaultIncludeLen = Boolean.parseBoolean(props.getProperty("includeLen"));
             if (props.containsKey("autosave")) autosaveEnabled = Boolean.parseBoolean(props.getProperty("autosave"));
+            if (props.containsKey("fail.lenMin")) failLenMin = Integer.parseInt(props.getProperty("fail.lenMin"));
+            if (props.containsKey("fail.lenMax")) failLenMax = Integer.parseInt(props.getProperty("fail.lenMax"));
+            if (props.containsKey("fail.tmMin")) failTmMin = Double.parseDouble(props.getProperty("fail.tmMin"));
+            if (props.containsKey("fail.tmMax")) failTmMax = Double.parseDouble(props.getProperty("fail.tmMax"));
+            if (props.containsKey("fail.gcMin")) failGcMin = Double.parseDouble(props.getProperty("fail.gcMin"));
+            if (props.containsKey("fail.gcMax")) failGcMax = Double.parseDouble(props.getProperty("fail.gcMax"));
+            if (props.containsKey("fail.hairpinTh")) failHairpinTh = Double.parseDouble(props.getProperty("fail.hairpinTh"));
+            if (props.containsKey("fail.selfTh")) failSelfTh = Double.parseDouble(props.getProperty("fail.selfTh"));
+            if (props.containsKey("fail.hetero3pTh")) failHetero3pTh = Integer.parseInt(props.getProperty("fail.hetero3pTh"));
+            if (props.containsKey("fail.heteroDgTh")) failHeteroDgTh = Double.parseDouble(props.getProperty("fail.heteroDgTh"));
         } catch (Exception ignore) {
         }
     }

@@ -36,11 +36,21 @@ public class ExportUtils {
         return fc.getSelectedFile();
     }
 
+    /** v0.1.15：导出前若目标文件已存在，弹窗询问是否覆盖；true=允许覆盖，false=取消导出 */
+    private static boolean confirmOverwrite(File f) {
+        if (!f.exists()) return true;
+        int r = JOptionPane.showConfirmDialog(null,
+                "文件已存在，是否覆盖？\n" + f.getAbsolutePath(),
+                "覆盖确认", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        return r == JOptionPane.YES_OPTION;
+    }
+
     // ---------- 1) BED ----------
 
     public static void exportBED() {
         File f = pick(true, "primers.bed", "BED 文件", "bed");
         if (f == null) return;
+        if (!confirmOverwrite(f)) return;
         try {
             writeBED(f);
             JOptionPane.showMessageDialog(null, "BED 已导出: " + f.getAbsolutePath()
@@ -96,6 +106,7 @@ public class ExportUtils {
     public static void exportPrimerFasta() {
         File f = pick(true, "primers.fasta", "FASTA 文件", "fa");
         if (f == null) return;
+        if (!confirmOverwrite(f)) return;
         try {
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
             for (Primer p : PrimerStore.getPrimers()) {
@@ -129,6 +140,7 @@ public class ExportUtils {
     public static void exportReadFasta() {
         File f = pick(true, "reads.fasta", "FASTA 文件", "fa");
         if (f == null) return;
+        if (!confirmOverwrite(f)) return;
         Genome g = GenomeManager.getInstance().getCurrentGenome();
         if (g == null) {
             JOptionPane.showMessageDialog(null, "参考基因组未加载");

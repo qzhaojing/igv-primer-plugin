@@ -1,5 +1,7 @@
 package org.broad.igv.primer;
 
+import org.broad.igv.primer.PrimerStore;
+
 /**
  * 引物指标计算：Tm（SantaLucia 1998 最近邻法 + 50mM Na+ 校正）、GC%、hairpin、self/hetero dimer、3' 互补。
  * 判定标准按超多重 PCR 保守口径。
@@ -206,11 +208,14 @@ public class PrimerMetrics {
         p.selfDG = selfDG(seq);
 
         StringBuilder bad = new StringBuilder();
-        if (p.length() < 18 || p.length() > 30) bad.append("长度" + p.length() + "nt(18-30) ");
-        if (!Double.isNaN(p.tm) && (p.tm < 55 || p.tm > 65)) bad.append("Tm越界 ").append(String.format("%.1f ", p.tm));
-        if (!Double.isNaN(p.gc) && (p.gc < 30 || p.gc > 75)) bad.append("GC越界 ").append(String.format("%.0f%% ", p.gc));
-        if (p.hairpinDG <= -3.5) bad.append("hairpin强 ");
-        if (p.selfDG <= -5.0) bad.append("self-dimer强 ");
+        if (p.length() < PrimerStore.failLenMin || p.length() > PrimerStore.failLenMax)
+            bad.append("长度" + p.length() + "nt(" + PrimerStore.failLenMin + "-" + PrimerStore.failLenMax + ") ");
+        if (!Double.isNaN(p.tm) && (p.tm < PrimerStore.failTmMin || p.tm > PrimerStore.failTmMax))
+            bad.append("Tm越界 ").append(String.format("%.1f ", p.tm));
+        if (!Double.isNaN(p.gc) && (p.gc < PrimerStore.failGcMin || p.gc > PrimerStore.failGcMax))
+            bad.append("GC越界 ").append(String.format("%.0f%% ", p.gc));
+        if (p.hairpinDG <= PrimerStore.failHairpinTh) bad.append("hairpin强 ");
+        if (p.selfDG <= PrimerStore.failSelfTh) bad.append("self-dimer强 ");
         p.failReasons = bad.toString().trim();
         p.pass = p.failReasons.isEmpty();
     }
