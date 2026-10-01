@@ -325,29 +325,23 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
         Primer hit = findPrimerAt(x, y, chr);
 
-        // v0.1.27 Ctrl+点击 = 配对切换（toggle）：
-        //  先普通点击选定一个锚点引物 → 再 Ctrl+点击 另一条 → 二者未连则建立 pair 连线、已连则取消这两条之间的连线；
-        //  Ctrl+Shift+点击 = 清掉所点引物整个配对组（其伙伴同清）。锚点在 toggle 后保持选中，便于连续操作。
+        // Ctrl+点击 = 配对切换（toggle，v0.1.27 起；v0.1.28 移除原 Ctrl+Shift 清整组功能，避免误触）：
+        //  先普通点击选定一个锚点引物 → 再 Ctrl+点击 另一条 → 二者未连则建立 pair 连线、已连则取消这两条之间的连线。
+        //  锚点在 toggle 后保持选中，便于连续操作。Ctrl+Shift+点击 现等同 Ctrl+点击（不再清整组）。
         // 命中引物时拦截，不进入拖拽流程。
         if (hit != null && e.isControlDown()) {
-            if (e.isShiftDown()) {
-                // 只清点击引物所在的配对组（其伙伴同清），其余引物配对完全不受影响
-                PrimerStore.unpairAllFor(hit);
-                PrimerStore.selected = hit;
+            Primer sel = PrimerStore.selected;
+            if (sel == null || sel == hit) {
+                PrimerStore.selected = hit;       // 首次/再次点击：定为锚点（配对基准）
             } else {
-                Primer sel = PrimerStore.selected;
-                if (sel == null || sel == hit) {
-                    PrimerStore.selected = hit;       // 首次/再次点击：定为锚点（配对基准）
+                boolean paired = sel.ampliconId != null && sel.ampliconId.equals(hit.ampliconId);
+                if (paired) {
+                    PrimerStore.unpairPrimer(sel, hit);   // 已连 → 取消这两条之间的连线
                 } else {
-                    boolean paired = sel.ampliconId != null && sel.ampliconId.equals(hit.ampliconId);
-                    if (paired) {
-                        PrimerStore.unpairPrimer(sel, hit);   // 已连 → 取消这两条之间的连线
-                    } else {
-                        PrimerStore.mergePair(sel, hit);      // 未连 → 产生 pair 连线
-                    }
-                    // 锚点保持选中，便于继续切换/叠加；同理 unpair 后 sel 仍可作锚点
-                    PrimerStore.selected = sel;
+                    PrimerStore.mergePair(sel, hit);      // 未连 → 产生 pair 连线
                 }
+                // 锚点保持选中，便于继续切换/叠加；同理 unpair 后 sel 仍可作锚点
+                PrimerStore.selected = sel;
             }
             e.consume();                              // 阻止 IGV 原生 pan/zoom 对 Ctrl 点击的响应
             dp.repaint();
