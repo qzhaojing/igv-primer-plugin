@@ -52,8 +52,11 @@ public class PrimerTrack extends AbstractTrack {
         java.util.Map<Primer, Integer> rows = layoutRows(vis);
         int nRows = 0;
         for (Integer r : rows.values()) nRows = Math.max(nRows, r + 1);
-        int needH = Math.max(60, nRows * ROW_H + 14);
-        if (getHeight() < needH) setHeight(needH);
+        // v0.1.29 卡死根因修复：render 的高度公式必须与 computeNeededHeight() 完全一致（含 TOOLBAR_H），
+        // 且允许收缩（!= 而非 <）。此前 render 漏算 TOOLBAR_H 且只增不减，导致 refresh() 中
+        // newH 恒 = oldH + 28 ≠ oldH → 每次点击/按键都触发全量 doRefresh()（重绘 14 轨 + 重载数据）→ 严重卡死。
+        int needH = Math.max(60, TOOLBAR_H + nRows * ROW_H + 14);
+        if (getHeight() != needH) setHeight(needH);
 
         // 1) 配对连线：size==2 同排水平线；size>2 hub-spoke 放射线（不同色区分每条配对）
         java.util.Set<String> drawnGroups = new java.util.HashSet<String>();

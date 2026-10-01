@@ -130,6 +130,14 @@ public class PrimerStore {
         refresh();
     }
 
+    /**
+     * v0.1.29 卡死帮凶修复：二聚体评估结果缓存（key = 两条引物 seq 拼接）。
+     * evaluatePairs 是 O(n²)：200 条引物 ≈ 2 万对 × dimerDG/3'互补 逐碱基对齐，在 EDT 上一次要 1~2 秒；
+     * 序列没变时直接复用缓存，第二次起毫秒级。仅当某条引物序列被重算（refreshSequence）后对应 key 才会失效（自然 miss）。
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<String, double[]> dimerCache =
+            new java.util.concurrent.ConcurrentHashMap<String, double[]>();
+
     /** 配对评估：同 ampliconId 的 R1/R2 之间 heteroDG 与 3' 互补 */
     public static void evaluatePairs() {
         for (Primer p : primers) {
@@ -138,18 +146,27 @@ public class PrimerStore {
         }
         for (int i = 0; i < primers.size(); i++) {
             Primer a = primers.get(i);
+            if (a.seq == null || a.seq.length() < 4) continue;   // 无序列（参考未加载）：对端也置 0 即可，跳过昂贵对齐
             for (int j = i + 1; j < primers.size(); j++) {
                 Primer b = primers.get(j);
+                if (b.seq == null || b.seq.length() < 4) continue;
                 boolean paired = a.ampliconId != null && a.ampliconId.equals(b.ampliconId);
                 boolean cross = !paired && a.chr.equals(b.chr);
                 if (!paired && !cross) continue;
-                double dg = PrimerMetrics.dimerDG(a.seq, b.seq);
-                int c3 = PrimerMetrics.max3pComplement(a.seq, b.seq);
-                a.heteroDG = Math.min(a.heteroDG, dg);
+                String key = a.seq + "\u0001" + b.seq;
+                double[] res = dimerCache.get(key);
+                if (res == null) {
+                    res = new double[]{PrimerMetrics.dimerDG(a.seq, b.seq),
+                            PrimerMetrics.max3pComplement(a.seq, b.seq)};
+                    if (dimerCache.size() > 200000) dimerCache.clear();   // 防止序列反复编辑时无限膨胀
+                    dimerCache.put(key, res);
+                }
+                int c3 = (int) res[1];
+                a.heteroDG = Math.min(a.heteroDG, res[0]);
                 a.max3pComp = Math.max(a.max3pComp, c3);
-                b.heteroDG = Math.min(b.heteroDG, dg);
+                b.heteroDG = Math.min(b.heteroDG, res[0]);
                 b.max3pComp = Math.max(b.max3pComp, c3);
-                if (c3 >= failHetero3pTh || dg <= failHeteroDgTh) {
+                if (c3 >= failHetero3pTh || res[0] <= failHeteroDgTh) {
                     flag(a, "二聚体(3'comp=" + c3 + ")");
                     flag(b, "二聚体(3'comp=" + c3 + ")");
                 }
