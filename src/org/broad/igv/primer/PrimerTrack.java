@@ -689,12 +689,10 @@ public class PrimerTrack extends AbstractTrack {
             g.drawRect(x0 - 2, y - 3, w + 4, h + 8);
         }
 
-        // 单行星号标签（引物下方，节省纵向空间）：名称 + 方向 + Tm/GC + 测序长度
+        // v0.1.31：标签只显示引物名——Tm/GC/测序长度等详细信息移入悬浮提示框（getValueStringAt），保持画面清爽
         g.setColor(p.pass ? Color.DARK_GRAY : Color.RED);
         g.setFont(g.getFont().deriveFont(11f));
-        String label = p.name + " " + (p.strand == '+' ? "F" : "R")
-                + " Tm" + String.format("%.0f", p.tm) + " GC" + String.format("%.0f", p.gc)
-                + (p.readLen > 0 ? " " + (p.strand == '+' ? "R1+" : "R2-") + p.readLen + "nt" : "");
+        String label = p.name;
         g.drawString(label, x0, y + h + 13);
         g.setFont(g.getFont().deriveFont(10f));
 
@@ -746,6 +744,54 @@ public class PrimerTrack extends AbstractTrack {
             g.drawString(String.valueOf(gp + 1), x + 2, rect.y + 12);
         }
         gg.setStroke(new BasicStroke(1f));
+    }
+
+    /**
+     * v0.1.31：鼠标悬停信息框（IGV tooltip 钩子，需开启 View → Show details on hover）。
+     * 返回 HTML 片段，由 DataPanel.updateTooltipText 包上 <html> 拼接显示，<br> 换行。
+     * 引物名称标签已精简为只显示名称，全部详细信息（Tm/GC/二聚体/序列/状态）集中在此悬浮框。
+     */
+    @Override
+    public String getValueStringAt(String chr, double position, int mouseX, org.broad.igv.ui.panel.ReferenceFrame frame) {
+        try {
+            Primer p = hitTest((int) position, chr);
+            if (p == null) return null;
+            StringBuilder sb = new StringBuilder();
+            sb.append("<b>").append(p.name).append("</b>")
+              .append("  ").append(p.strand == '+' ? "F (+)" : "R (−)")
+              .append("  角色: ").append(p.role == null ? "-" : p.role);
+            if (p.ampliconId != null) sb.append("  |  配对组: ").append(p.ampliconId);
+            sb.append("<br>位置: ").append(p.chr).append(":").append(p.start + 1).append("-").append(p.end)
+              .append("  (").append(p.length()).append(" bp)");
+            sb.append("<br>Tm: ").append(fmtD(p.tm)).append(" ℃   GC: ").append(fmtD(p.gc)).append(" %");
+            sb.append("<br>hairpin ΔG: ").append(fmtD(p.hairpinDG))
+              .append("   self-dimer ΔG: ").append(fmtD(p.selfDG));
+            sb.append("<br>异源二聚体 ΔG: ").append(fmtD(p.heteroDG))
+              .append("   3' 互补: ").append(p.max3pComp).append(" bp");
+            if (p.readLen > 0) sb.append("<br>测序: ").append(p.strand == '+' ? "R1+" : "R2-")
+                    .append(p.readLen).append(" nt");
+            if (p.group != null && !p.group.isEmpty()) sb.append("<br>来源: ").append(p.group);
+            sb.append("<br>状态: ");
+            if (p.pass) sb.append("<font color='green'>✔ 通过</font>");
+            else {
+                sb.append("<font color='red'>✗ ");
+                if (p.failReasons != null && !p.failReasons.isEmpty()) sb.append(p.failReasons).append(" ");
+                if (p.dimerReason != null && !p.dimerReason.isEmpty()) sb.append(p.dimerReason);
+                sb.append("</font>");
+            }
+            if (p.seq != null && !p.seq.isEmpty()) {
+                String s = p.strand == '+' ? p.seq : PrimerMetrics.revComp(p.seq);
+                sb.append("<br>序列 5'→3': <font face='monospaced'>").append(s).append("</font>");
+            }
+            return sb.toString();
+        } catch (Throwable t) {
+            return null;   // 悬停信息绝不影响正常渲染
+        }
+    }
+
+    /** 数值格式化：NaN 显示 "-"，否则保留 1 位小数 */
+    private static String fmtD(double v) {
+        return Double.isNaN(v) ? "-" : String.format("%.1f", v);
     }
 
     /** 右键菜单（IGV 原生 track 菜单扩展点） */
