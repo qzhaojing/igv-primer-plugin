@@ -332,6 +332,9 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         int x = e.getX();
         int y = e.getY();
 
+        // v0.1.19：点击落在 track 顶部工具条上 → 交给 PrimerTrack.handleDataClick 处理，不平移/不拖拽
+        if (PrimerTrack.isInToolbar(x, y, chr)) return;
+
         dragging = null;
         mode = MODE_NONE;
         panning = false;

@@ -146,6 +146,53 @@ public class PrimerTrack extends AbstractTrack {
         for (Primer p : vis) {
             drawPrimer(ctx, g, rect, p, rows.get(p));
         }
+
+        // 3) 顶部参数工具条（常驻按钮栏）：等价于右键部分常用项，且不受编辑模式开关影响
+        Rectangle bar = new Rectangle(rect.x, rect.y, rect.width, TOOLBAR_H);
+        toolbarRect = bar;
+        toolbarChr = chr;
+        toolbarBtns.clear();
+        g.setColor(new Color(238, 238, 238));
+        g.fillRect(bar.x, bar.y, bar.width, bar.height);
+        g.setColor(new Color(180, 180, 180));
+        g.drawLine(bar.x, bar.y + bar.height - 1, bar.x + bar.width, bar.y + bar.height - 1);
+        g.setFont(g.getFont().deriveFont(10f));
+        for (ToolbarBtn b : toolbarLayout(bar)) {
+            toolbarBtns.put(b.id, b.rect);
+            g.setColor(b.on ? new Color(200, 235, 200) : new Color(248, 248, 248));
+            g.fillRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
+            g.setColor(b.on ? new Color(60, 140, 60) : new Color(120, 120, 120));
+            g.drawRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
+            g.setColor(Color.DARK_GRAY);
+            int tw = g.getFontMetrics(g.getFont()).stringWidth(b.label);
+            g.drawString(b.label, b.rect.x + (b.rect.width - tw) / 2, b.rect.y + b.rect.height - 4);
+        }
+    }
+
+    /** 计算工具条按钮布局（render 与点击处理共用，保证位置一致）。 */
+    private static java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
+        java.util.List<ToolbarBtn> out = new java.util.ArrayList<ToolbarBtn>();
+        int x = bar.x + 4;
+        int y = bar.y + 3;
+        int h = TOOLBAR_H - 6;
+        java.util.Map<String, String> defs = new java.util.LinkedHashMap<String, String>();
+        boolean inEdit = PrimerEditTool.inEditMode();
+        defs.put("edit", inEdit ? "退出编辑" : "进入编辑");
+        defs.put("seq", "序列:" + (PrimerStore.showSeq ? "开" : "关"));
+        defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
+        defs.put("exp", "导出BED");
+        defs.put("imp", "导入BED");
+        for (java.util.Map.Entry<String, String> e : defs.entrySet()) {
+            String id = e.getKey();
+            String label = e.getValue();
+            boolean on = id.equals("edit") ? inEdit
+                    : id.equals("seq") ? PrimerStore.showSeq
+                    : id.equals("auto") ? PrimerStore.autosaveEnabled : false;
+            int w = 14 + label.length() * 7;
+            out.add(new ToolbarBtn(id, label, on, new Rectangle(x, y, w, h)));
+            x += w + 4;
+        }
+        return out;
     }
 
     public static final int ROW_H = 30;    // 行高（压缩，引物条更窄）
@@ -159,6 +206,23 @@ public class PrimerTrack extends AbstractTrack {
             new Color(255, 140, 0), new Color(150, 0, 200), new Color(0, 150, 160),
             new Color(200, 0, 120), new Color(130, 110, 0), new Color(0, 110, 200)
     };
+
+    /** v0.1.19：track 顶部参数工具条高度（一条常驻按钮栏，等价于右键部分常用项，且不受编辑模式开关影响） */
+    public static final int TOOLBAR_H = 20;
+    private static Rectangle toolbarRect = null;          // 工具条背景矩形（屏幕坐标，随渲染更新）
+    private static String toolbarChr = null;             // 该矩形对应的染色体
+    private static final java.util.Map<String, Rectangle> toolbarBtns =
+            new java.util.HashMap<String, Rectangle>();   // 按钮 id -> 屏幕矩形
+
+    /** 工具条按钮（内部记录 id/文案/是否激活/矩形） */
+    private static class ToolbarBtn {
+        String id, label;
+        boolean on;
+        Rectangle rect;
+        ToolbarBtn(String id, String label, boolean on, Rectangle rect) {
+            this.id = id; this.label = label; this.on = on; this.rect = rect;
+        }
+    }
 
     /** v0.1.3：长度格式化 —— <1000 显示 "N bp"，否则 "x.xx kb" */
     static String formatLen(int len) {
@@ -235,7 +299,7 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     private int rowY(Rectangle rect, int row) {
-        return rect.y + 4 + Math.max(0, row) * ROW_H;
+        return rect.y + TOOLBAR_H + 4 + Math.max(0, row) * ROW_H;
     }
 
     /**
@@ -252,7 +316,7 @@ public class PrimerTrack extends AbstractTrack {
         java.util.Map<Primer, Integer> rows = layoutRows(vis);
         int nRows = 0;
         for (Integer r : rows.values()) nRows = Math.max(nRows, r + 1);
-        return Math.max(60, nRows * ROW_H + 14);
+        return Math.max(60, TOOLBAR_H + nRows * ROW_H + 14);
     }
 
     /**
@@ -526,10 +590,13 @@ public class PrimerTrack extends AbstractTrack {
             }
         }));
 
-        JMenuItem editMode = new JMenuItem("进入引物编辑模式（拖拽/拖边）");
+        // v0.1.19：进入/退出编辑模式合并为单一切换项（文案随当前状态变化）
+        final boolean inEdit = PrimerEditTool.inEditMode();
+        JMenuItem editMode = new JMenuItem(inEdit ? "退出引物编辑模式（拖拽/拖边）" : "进入引物编辑模式（拖拽/拖边）");
         editMode.addActionListener(new ActionListener() {
             public void actionPerformed(ActionEvent e) {
-                PrimerEditTool.enterEditMode();
+                if (PrimerEditTool.inEditMode()) PrimerEditTool.exitEditMode();
+                else PrimerEditTool.enterEditMode();
             }
         });
         menu.add(editMode);
@@ -734,11 +801,6 @@ public class PrimerTrack extends AbstractTrack {
             }
         }));
         menu.addSeparator();
-        menu.add(item("退出引物编辑模式", new Runnable() {
-            public void run() {
-                PrimerEditTool.exitEditMode();
-            }
-        }));
         return menu;
     }
 
@@ -793,5 +855,47 @@ public class PrimerTrack extends AbstractTrack {
             }
         }
         return null;
+    }
+
+    /**
+     * v0.1.19：顶部工具条左键点击处理（IGV 会把 track 数据区左键点击派发到此，与编辑模式无关）。
+     * 命中某个按钮则执行对应动作并返回 true；否则交给 IGV 默认行为。
+     */
+    @Override
+    public boolean handleDataClick(org.broad.igv.track.TrackClickEvent e) {
+        if (toolbarRect == null || !e.getFrame().getChrName().equals(toolbarChr)) return false;
+        java.awt.event.MouseEvent me = e.getMouseEvent();
+        int x = me.getX(), y = me.getY();
+        for (java.util.Map.Entry<String, Rectangle> en : toolbarBtns.entrySet()) {
+            if (en.getValue().contains(x, y)) {
+                runToolbar(en.getKey());
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 工具条按钮动作（与右键菜单对应项一致） */
+    private static void runToolbar(String id) {
+        if ("edit".equals(id)) {
+            if (PrimerEditTool.inEditMode()) PrimerEditTool.exitEditMode();
+            else PrimerEditTool.enterEditMode();
+        } else if ("seq".equals(id)) {
+            PrimerStore.showSeq = !PrimerStore.showSeq;
+            PrimerStore.refresh();
+        } else if ("auto".equals(id)) {
+            PrimerStore.setAutosave(!PrimerStore.autosaveEnabled);
+            PrimerStore.refresh();
+        } else if ("exp".equals(id)) {
+            ExportUtils.exportBED();
+        } else if ("imp".equals(id)) {
+            ExportUtils.importBED();
+        }
+    }
+
+    /** 屏幕坐标 (x,y) 是否落在当前染色体的工具条区域内（供编辑工具在工具条上做点击时跳过平移/拖拽） */
+    public static boolean isInToolbar(int x, int y, String chr) {
+        if (toolbarRect == null || !chr.equals(toolbarChr)) return false;
+        return toolbarRect.contains(x, y);
     }
 }
