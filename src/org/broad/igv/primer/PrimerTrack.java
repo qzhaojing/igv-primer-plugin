@@ -135,17 +135,9 @@ public class PrimerTrack extends AbstractTrack {
                     // 箭头指向 hub 侧（曲线终点附近）
                     drawDirArrow(g, xHub + (xS < xHub ? -6 : 6), yHub + (yS < yHub ? -4 : 4),
                             xS < xHub ? -1 : 1, c);
-                    g.setFont(g.getFont().deriveFont(8f));
-                    g.setColor(c.darker());
-                    g.drawString("P" + (idx + 1), xS + (xS <= xHub ? 4 : -16), yS - 4);
-                    g.setFont(g.getFont().deriveFont(10f));
+                    // v0.1.31：去掉曲线端点/汇聚处的 "P1"、"hub×N" 小字标注——画面更干净
                     idx++;
                 }
-                // hub 标记：文字 + 小圆点
-                g.setColor(Color.DARK_GRAY);
-                g.setFont(g.getFont().deriveFont(8f));
-                g.drawString("hub×" + grp.size(), xHub - 12, yHub - 5);
-                g.setFont(g.getFont().deriveFont(10f));
                 g.setColor(new Color(60, 60, 60));
                 g.fillOval(xHub - 2, yHub - 2, 4, 4);
             }
@@ -678,8 +670,9 @@ public class PrimerTrack extends AbstractTrack {
 
         // 失败标记：仅把引物自身轮廓（箭头主体）描红，不画额外方框/椭圆环
         if (!p.pass) {
-            g.setColor(Color.RED);
-            g.setStroke(new BasicStroke(2f));
+            // v0.1.31：fail 轮廓改细+浅红，不再喧宾夺主
+            g.setColor(new Color(0xE8, 0x9A, 0x9A));   // 浅红
+            g.setStroke(new BasicStroke(1f));
             g.draw(arrow);
             g.setStroke(new BasicStroke(1f));
         }
@@ -690,7 +683,8 @@ public class PrimerTrack extends AbstractTrack {
         }
 
         // v0.1.31：标签只显示引物名——Tm/GC/测序长度等详细信息移入悬浮提示框（getValueStringAt），保持画面清爽
-        g.setColor(p.pass ? Color.DARK_GRAY : Color.RED);
+        // v0.1.31：名称统一冷静的深蓝灰（fail 状态由浅红轮廓+悬停框表达，名称不再用红色）
+        g.setColor(new Color(0x2E, 0x4A, 0x62));
         g.setFont(g.getFont().deriveFont(11f));
         String label = p.name;
         g.drawString(label, x0, y + h + 13);
