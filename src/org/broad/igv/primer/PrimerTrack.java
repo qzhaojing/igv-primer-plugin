@@ -24,7 +24,9 @@ public class PrimerTrack extends AbstractTrack {
 
     public PrimerTrack() {
         super("primer_designer");
-        setName("Primers 引物");
+        // v0.1.33：轨名必须用纯 ASCII——AbstractTrack.name 被 JAXB 序列化进 session XML，
+        // 中文名在 Windows 上会被写成非 UTF-8 字节，open session 时解析报 MalformedByteSequenceException 并丢失本轨。
+        setName("Primers");
         setColor(new Color(0, 128, 0));
         setHeight(60);
         PrimerStore.setTrack(this);
