@@ -1,31 +1,38 @@
 package org.broad.igv.primer;
 
+import org.broad.igv.feature.genome.Genome;
 import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
 
 import javax.swing.*;
+import javax.swing.border.TitledBorder;
 import java.awt.*;
+import java.awt.event.ActionListener;
 
 /**
  * 添加/编辑引物对话框：
- *  - 方向 (+/-)、角色 (R1/R2)、引物长度、NGS 测序条件（F/R 测序长度 nt）
- *  - 确定后按 3' 端自动生成测序延长区
+ *  - 基本信息（名称/染色体/区段/方向/角色）
+ *  - 测序设置（R1/R2 测序长度、口径、配对引物、扩增子 ID）
+ *  - 序列与评估：实时显示参考序列、Tm/GC/hairpin/self，二聚体按需评估（按钮触发，平时不计算）
+ * 确定后按 3' 端自动生成测序延长区。
  */
 public class AddPrimerDialog {
 
     public static void show(final int bp, final Primer existing) {
         Frame owner = IGV.getMainFrame();
         final JDialog dlg = new JDialog(owner, existing == null ? "添加引物" : "编辑引物 " + existing.name, true);
-        JPanel form = new JPanel(new GridBagLayout());
-        GridBagConstraints gc = new GridBagConstraints();
-        gc.insets = new Insets(4, 4, 4, 4);
-        gc.anchor = GridBagConstraints.WEST;
+        dlg.setLayout(new BorderLayout(6, 6));
+
+        // ===== 基本信息 =====
+        JPanel basic = section("基本信息");
+        GridBagConstraints gcb = new GridBagConstraints();
+        gcb.insets = new Insets(2, 4, 2, 4);
+        gcb.anchor = GridBagConstraints.WEST;
 
         final JTextField nameF = new JTextField(existing == null ? PrimerStore.nextName() : existing.name, 10);
         final JLabel nameWarn = new JLabel("");
         nameWarn.setForeground(Color.RED);
         final JTextField chrF = new JTextField(existing == null ? currentChr() : existing.chr, 12);
-        // v0.1.13：新增引物时起点（左端）对齐鼠标坐标，终点 = 起点 + 默认引物长度
         final JTextField startF = new JTextField(String.valueOf(existing == null ? bp : existing.start), 10);
         final JTextField endF = new JTextField(String.valueOf(existing == null ? bp + PrimerStore.defaultLen : existing.end), 10);
         final JComboBox strandC = new JComboBox(new Object[]{"+ (F)", "- (R)"});
@@ -34,36 +41,76 @@ public class AddPrimerDialog {
         final JComboBox roleC = new JComboBox(new Object[]{"R1", "R2"});
         if (existing != null && existing.role != null) roleC.setSelectedItem(existing.role);
         else roleC.setSelectedItem(PrimerStore.defaultRole);
-        int initRead = existing != null ? existing.readLen : PrimerStore.defaultReadF;
-        final JSpinner readF = new JSpinner(new SpinnerNumberModel(initRead, 0, 1000, 5));
+
+        int r = 0;
+        addRow(basic, gcb, r++, "名称", nameF);
+        addRow(basic, gcb, r++, "名称状态", nameWarn);
+        addRow(basic, gcb, r++, "染色体", chrF);
+        addRow(basic, gcb, r++, "起始(0-based)", startF);
+        addRow(basic, gcb, r++, "终止(exclusive)", endF);
+        addRow(basic, gcb, r++, "方向", strandC);
+        addRow(basic, gcb, r++, "角色", roleC);
+
+        // ===== 测序设置 =====
+        JPanel seqSet = section("测序设置");
+        GridBagConstraints gcs = new GridBagConstraints();
+        gcs.insets = new Insets(2, 4, 2, 4);
+        gcs.anchor = GridBagConstraints.WEST;
+        int rf0 = existing != null ? existing.readLen : PrimerStore.defaultReadF;
+        final JSpinner readF = new JSpinner(new SpinnerNumberModel(rf0, 0, 1000, 5));
         final JSpinner readR = new JSpinner(new SpinnerNumberModel(existing != null ? existing.readLen : PrimerStore.defaultReadR, 0, 1000, 5));
-        // v8：测序长度口径——勾选后填 61 且引物 20nt → 实际延伸 41（存延伸部分，显示/导出按总长标注）
         final JCheckBox incLen = new JCheckBox("包含引物长度");
         incLen.setSelected(PrimerStore.defaultIncludeLen);
         incLen.setToolTipText("勾选：填写值=引物+延伸总长；不勾：填写值=延伸部分长度");
         final JTextField pairF = new JTextField(existing != null ? PrimerStore.groupPartnerNames(existing) : "", 16);
         final JLabel ampF = new JLabel(existing == null ? PrimerStore.nextAmplicon() : existing.ampliconId);
+        int r2 = 0;
+        addRow(seqSet, gcs, r2++, "F 测序长度 nt (R1)", readF);
+        addRow(seqSet, gcs, r2++, "R 测序长度 nt (R2)", readR);
+        addRow(seqSet, gcs, r2++, "测序长度口径", incLen);
+        addRow(seqSet, gcs, r2++, "配对引物名称(可填多条,逗号分隔)", pairF);
+        addRow(seqSet, gcs, r2++, "扩增子 ID", ampF);
 
-        int row = 0;
-        addRow(form, gc, row++, "名称", nameF);
-        addRow(form, gc, row++, "名称状态", nameWarn);
-        addRow(form, gc, row++, "染色体", chrF);
-        addRow(form, gc, row++, "起始(0-based)", startF);
-        addRow(form, gc, row++, "终止(exclusive)", endF);
-        addRow(form, gc, row++, "方向", strandC);
-        addRow(form, gc, row++, "角色", roleC);
-        addRow(form, gc, row++, "F 测序长度 nt (R1)", readF);
-        addRow(form, gc, row++, "R 测序长度 nt (R2)", readR);
-        addRow(form, gc, row++, "测序长度口径", incLen);
-        addRow(form, gc, row++, "配对引物名称(可填多条,逗号分隔)", pairF);
-        addRow(form, gc, row++, "扩增子 ID", ampF);
+        // ===== 序列与评估 =====
+        JPanel eval = section("序列与评估（二聚体按需评估，平时不计算）");
+        GridBagConstraints gce = new GridBagConstraints();
+        gce.insets = new Insets(2, 4, 2, 4);
+        gce.anchor = GridBagConstraints.WEST;
+        final JTextArea seqArea = new JTextArea(2, 26);
+        seqArea.setEditable(false);
+        seqArea.setLineWrap(true);
+        seqArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JScrollPane seqScroll = new JScrollPane(seqArea);
+        JButton readSeqBtn = new JButton("读取序列");
+        final JLabel tmL = new JLabel("-");
+        final JLabel gcL = new JLabel("-");
+        final JLabel hairL = new JLabel("-");
+        final JLabel selfL = new JLabel("-");
+        final JLabel heteroL = new JLabel("-");
+        final JLabel compL = new JLabel("-");
+        final JLabel statusL = new JLabel("—");
+        statusL.setForeground(Color.BLUE);
+        JButton evalBtn = new JButton("评估二聚体");
+        int r3 = 0;
+        addRow(eval, gce, r3++, "序列", seqScroll);
+        addRow(eval, gce, r3++, "", readSeqBtn);
+        addRow(eval, gce, r3++, "Tm", tmL);
+        addRow(eval, gce, r3++, "GC%", gcL);
+        addRow(eval, gce, r3++, "hairpin ΔG", hairL);
+        addRow(eval, gce, r3++, "self-dimer ΔG", selfL);
+        addRow(eval, gce, r3++, "异源二聚体 ΔG", heteroL);
+        addRow(eval, gce, r3++, "3' 互补碱基数", compL);
+        addRow(eval, gce, r3++, "评估状态", statusL);
+        addRow(eval, gce, r3++, "", evalBtn);
 
-        if (existing == null) {
-            JLabel tip = new JLabel("确定后：引物自动生成测序延长区（3'端起 readLen nt）");
-            tip.setForeground(Color.GRAY);
-            addRow(form, gc, row++, "", tip);
-        }
+        // 容器
+        JPanel form = new JPanel();
+        form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
+        form.add(basic);
+        form.add(seqSet);
+        form.add(eval);
 
+        // ===== 底部按钮 =====
         final JButton ok = new JButton(existing == null ? "添加" : "更新");
         JButton cancel = new JButton("取消");
         JButton saveCfg = new JButton("保存配置");
@@ -71,6 +118,12 @@ public class AddPrimerDialog {
         btns.add(ok);
         btns.add(cancel);
         btns.add(saveCfg);
+
+        dlg.add(new JScrollPane(form), BorderLayout.CENTER);
+        dlg.add(btns, BorderLayout.SOUTH);
+
+        // 当前展示用的引物对象（preview / eval 结果）
+        final Primer[] cur = {null};
 
         // 名称实时校验：空 / 重名 → 提示并禁用「添加/更新」
         final Runnable updateNameStatus = new Runnable() {
@@ -95,13 +148,122 @@ public class AddPrimerDialog {
         });
         updateNameStatus.run();
 
-        dlg.setLayout(new BorderLayout());
-        dlg.add(form, BorderLayout.CENTER);
-        dlg.add(btns, BorderLayout.SOUTH);
+        // 把 p 的指标写到面板
+        final Runnable display = new Runnable() {
+            public void run() {
+                Primer p = cur[0];
+                if (p == null) {
+                    seqArea.setText("");
+                    tmL.setText("-"); gcL.setText("-"); hairL.setText("-"); selfL.setText("-");
+                    heteroL.setText("-"); compL.setText("-");
+                    statusL.setText("—"); statusL.setForeground(Color.BLUE);
+                    return;
+                }
+                seqArea.setText(p.seq == null ? "" : p.seq);
+                tmL.setText(fmt(p.tm));
+                gcL.setText(fmt(p.gc) + (Double.isNaN(p.gc) ? "" : "%"));
+                hairL.setText(String.format("%.1f", p.hairpinDG));
+                selfL.setText(String.format("%.1f", p.selfDG));
+                heteroL.setText(String.format("%.1f", p.heteroDG));
+                compL.setText(String.format("%d", p.max3pComp));
+                if (!p.dimerReason.isEmpty()) {
+                    statusL.setText("不通过： " + p.dimerReason);
+                    statusL.setForeground(Color.RED);
+                } else if (p.heteroDG != 0 || p.max3pComp != 0 || !p.failReasons.isEmpty()) {
+                    String s = "通过";
+                    if (!p.failReasons.isEmpty()) s = "不通过： " + p.failReasons;
+                    else s = "通过（heteroDG=" + String.format("%.1f", p.heteroDG) + ", 3'comp=" + p.max3pComp + "）";
+                    statusL.setText(s);
+                    statusL.setForeground(p.failReasons.isEmpty() ? new Color(0, 128, 0) : Color.RED);
+                } else {
+                    statusL.setText("未评估二聚体（点「评估二聚体」）");
+                    statusL.setForeground(Color.BLUE);
+                }
+            }
+        };
+
+        // 从当前输入框构建临时引物并刷新序列 + 单引物指标（Tm/GC/hairpin/self），不跑二聚体
+        final Runnable updatePreview = new Runnable() {
+            public void run() {
+                try {
+                    String chr = chrF.getText().trim();
+                    int s = Integer.parseInt(startF.getText().trim());
+                    int e = Integer.parseInt(endF.getText().trim());
+                    Primer p = new Primer();
+                    p.name = nameF.getText().trim();
+                    p.chr = chr; p.start = s; p.end = e;
+                    p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
+                    p.role = (String) roleC.getSelectedItem();
+                    p.seq = readSeqFromGenome(chr, s, e);
+                    PrimerMetrics.evaluate(p);
+                    cur[0] = p;
+                    display.run();
+                } catch (Exception ignore) {
+                    cur[0] = null;
+                    display.run();
+                }
+            }
+        };
+
+        // 「评估二聚体」：existing → 全局评估全部引物；new → 仅评估此拟添加引物对现有集合
+        final Runnable evalDimer = new Runnable() {
+            public void run() {
+                if (existing != null) {
+                    PrimerStore.evaluatePairs();
+                    cur[0] = existing;
+                    display.run();
+                    JOptionPane.showMessageDialog(dlg, "已对全部 " + PrimerStore.getPrimers().size() + " 条引物评估二聚体。");
+                } else {
+                    try {
+                        String chr = chrF.getText().trim();
+                        int s = Integer.parseInt(startF.getText().trim());
+                        int e = Integer.parseInt(endF.getText().trim());
+                        Primer p = new Primer();
+                        p.name = nameF.getText().trim();
+                        p.chr = chr; p.start = s; p.end = e;
+                        p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
+                        p.role = (String) roleC.getSelectedItem();
+                        p.seq = readSeqFromGenome(chr, s, e);
+                        PrimerMetrics.evaluate(p);
+                        PrimerStore.evaluateOneAgainstAll(p);
+                        cur[0] = p;
+                        display.run();
+                        JOptionPane.showMessageDialog(dlg,
+                                "已基于现有 " + PrimerStore.getPrimers().size() + " 条引物评估该拟添加引物的二聚体。");
+                    } catch (Exception ex) {
+                        JOptionPane.showMessageDialog(dlg, "坐标无效，无法评估。");
+                    }
+                }
+            }
+        };
+
+        // 输入变化即刷新序列与单引物指标
+        javax.swing.event.DocumentListener dl = new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
+        };
+        chrF.getDocument().addDocumentListener(dl);
+        startF.getDocument().addDocumentListener(dl);
+        endF.getDocument().addDocumentListener(dl);
+        ActionListener al = new ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
+        };
+        strandC.addActionListener(al);
+        roleC.addActionListener(al);
+        readSeqBtn.addActionListener(new ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
+        });
+        evalBtn.addActionListener(new ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { evalDimer.run(); }
+        });
+
+        // 打开即预览一次
+        updatePreview.run();
 
         final String ampliconId = existing == null ? PrimerStore.nextAmplicon() : existing.ampliconId;
 
-        ok.addActionListener(new java.awt.event.ActionListener() {
+        ok.addActionListener(new ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent e) {
                 try {
                     String name = nameF.getText().trim();
@@ -134,21 +296,18 @@ public class AddPrimerDialog {
                     PrimerStore.defaultLen = en - s;
                     PrimerStore.defaultStrand = strand;
                     PrimerStore.defaultRole = role;
-                    // v0.1.14：不再用单条引物的填写值覆盖公共默认测序长度（避免 R1/R2 默认值逐条漂移）；
-                    // 公共长度只由右键「本套/全部」或"保存配置"改变，单条设置仅作用于当前引物。
+                    // v0.1.14：不再用单条引物的填写值覆盖公共默认测序长度；公共长度只由右键/保存配置改变。
 
                     int raw = "R1".equals(role) ? rf : rr;
-                    // v8：勾选"包含引物长度" → 实际延伸 = 填写值 - 引物长度（下限 0）
                     int readLen = incLen.isSelected() ? Math.max(0, raw - (en - s)) : raw;
 
                     if (existing == null) {
                         Primer p = new Primer(name, chr, s, en, strand, role, readLen, ampliconId);
                         p.pairWith = pairText.isEmpty() ? null : pairText;
-                        // v0.1.14：新引物归入当前选中引物所属「套」，便于按套批量设置
                         p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
                         PrimerStore.add(p);
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
-                        PrimerStore.evaluatePairs();
+                        // v0.1.30：添加时不再自动跑 O(n²) 二聚体评估，仅在用户点击「评估二聚体」时按需计算
                     } else {
                         existing.name = name;
                         existing.chr = chr;
@@ -158,11 +317,10 @@ public class AddPrimerDialog {
                         existing.role = role;
                         existing.readLen = readLen;
                         existing.pairWith = pairText.isEmpty() ? null : pairText;
-                        // v0.1.9：先脱离旧配对组再按填写内容重连——否则清空/改名后 ampliconId 仍残留，配对取消不掉
                         PrimerStore.detach(existing);
                         if (pairNames.length > 0) PrimerStore.linkByNames(existing, pairNames);
                         PrimerStore.refreshSequence(existing);
-                        PrimerStore.evaluatePairs();
+                        // v0.1.30：编辑保存时不再自动跑 O(n²) 二聚体评估
                     }
                     PrimerStore.refresh();
                     dlg.dispose();
@@ -171,14 +329,12 @@ public class AddPrimerDialog {
                 }
             }
         });
-        cancel.addActionListener(new java.awt.event.ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent e) {
-                dlg.dispose();
-            }
+        cancel.addActionListener(new ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { dlg.dispose(); }
         });
 
-        // 保存配置：把当前对话框的 长度/方向/角色/测序长度 持久化到 ~/.igv_primer_defaults.properties，下次打开自动沿用
-        saveCfg.addActionListener(new java.awt.event.ActionListener() {
+        // 保存配置：把当前对话框的 长度/方向/角色/测序长度 持久化，下次打开自动沿用
+        saveCfg.addActionListener(new ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent e) {
                 try {
                     int s = Integer.parseInt(startF.getText().trim());
@@ -209,18 +365,38 @@ public class AddPrimerDialog {
         if (chr == null) return;
         int raw = "R1".equals(PrimerStore.defaultRole) ? PrimerStore.defaultReadF : PrimerStore.defaultReadR;
         int readLen = PrimerStore.defaultIncludeLen ? Math.max(0, raw - PrimerStore.defaultLen) : raw;
-        // v0.1.13：起点（左端）对齐鼠标坐标
         Primer p = new Primer(PrimerStore.nextName(), chr, bp, bp + PrimerStore.defaultLen,
                 PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, PrimerStore.nextAmplicon());
-        // v0.1.14：归入当前选中引物所属「套」
         p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
         PrimerStore.add(p);
-        PrimerStore.evaluatePairs();
+        // v0.1.30：快速添加不再自动跑 O(n²) 二聚体评估
         PrimerStore.refresh();
     }
 
     private static String currentChr() {
         return PrimerStore.lastChr;
+    }
+
+    /** 从参考基因组读取区段序列（大写） */
+    private static String readSeqFromGenome(String chr, int s, int e) {
+        try {
+            Genome g = GenomeManager.getInstance().getCurrentGenome();
+            if (g == null || chr == null) return "";
+            byte[] b = g.getSequence(chr, s, e);
+            return b == null ? "" : new String(b).toUpperCase();
+        } catch (Exception ex) {
+            return "";
+        }
+    }
+
+    private static String fmt(double v) {
+        return Double.isNaN(v) ? "-" : String.format("%.1f", v);
+    }
+
+    private static JPanel section(String title) {
+        JPanel p = new JPanel(new GridBagLayout());
+        p.setBorder(new TitledBorder(title));
+        return p;
     }
 
     private static void addRow(JPanel p, GridBagConstraints gc, int row, String label, JComponent field) {

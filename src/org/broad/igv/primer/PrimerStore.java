@@ -138,15 +138,22 @@ public class PrimerStore {
     private static final java.util.concurrent.ConcurrentHashMap<String, double[]> dimerCache =
             new java.util.concurrent.ConcurrentHashMap<String, double[]>();
 
-    /** 配对评估：同 ampliconId 的 R1/R2 之间 heteroDG 与 3' 互补 */
+    /**
+     * 配对二聚体评估（按需调用，平时不运行）：
+     *  - 仅当用户显式触发（右键「评估二聚体」或编辑面板「评估二聚体」按钮）时才执行 O(n²) 全量计算；
+     *  - 先清空所有引物的上次二聚体标记，再逐对计算 heteroDG / 3'互补，命中阈值写 dimerReason；
+     *  - 全局重算 pass = 非二聚体原因(failReasons)为空 且 dimerReason 为空。
+     * 序列没变时 dimerCache 命中，第二次起毫秒级。
+     */
     public static void evaluatePairs() {
         for (Primer p : primers) {
             p.heteroDG = 0;
             p.max3pComp = 0;
+            p.dimerReason = "";
         }
         for (int i = 0; i < primers.size(); i++) {
             Primer a = primers.get(i);
-            if (a.seq == null || a.seq.length() < 4) continue;   // 无序列（参考未加载）：对端也置 0 即可，跳过昂贵对齐
+            if (a.seq == null || a.seq.length() < 4) continue;   // 无序列（参考未加载）：跳过昂贵对齐
             for (int j = i + 1; j < primers.size(); j++) {
                 Primer b = primers.get(j);
                 if (b.seq == null || b.seq.length() < 4) continue;
@@ -167,16 +174,66 @@ public class PrimerStore {
                 b.heteroDG = Math.min(b.heteroDG, res[0]);
                 b.max3pComp = Math.max(b.max3pComp, c3);
                 if (c3 >= failHetero3pTh || res[0] <= failHeteroDgTh) {
-                    flag(a, "二聚体(3'comp=" + c3 + ")");
-                    flag(b, "二聚体(3'comp=" + c3 + ")");
+                    a.dimerReason = "二聚体(3'comp=" + c3 + ")";
+                    b.dimerReason = "二聚体(3'comp=" + c3 + ")";
                 }
             }
         }
+        for (Primer p : primers) {
+            p.pass = p.failReasons.isEmpty() && p.dimerReason.isEmpty();
+        }
     }
 
-    private static void flag(Primer p, String reason) {
-        p.pass = false;
-        p.failReasons = (p.failReasons.isEmpty() ? "" : p.failReasons + " ") + reason;
+    /**
+     * 清空所有引物的二聚体评估标记（O(n)，不跑 O(n²)）：配对结构或序列变化后调用，
+     * 避免陈旧二聚体 FAIL 标记残留。之后用户显式「评估二聚体」才会重新计算。
+     */
+    public static synchronized void resetDimerFlags() {
+        for (Primer p : primers) {
+            p.heteroDG = 0;
+            p.max3pComp = 0;
+            p.dimerReason = "";
+            if (p.failReasons == null) p.failReasons = "";
+            p.pass = p.failReasons.isEmpty();
+        }
+    }
+
+    /**
+     * 仅评估单条引物 p 与全部现有引物的二聚体（O(n)），结果写入 p 自身（不改全局）；
+     * 用于添加/编辑面板的实时预览，避免每次跑 O(n²) 全量。复用 dimerCache。
+     */
+    public static synchronized void evaluateOneAgainstAll(Primer p) {
+        p.heteroDG = 0;
+        p.max3pComp = 0;
+        p.dimerReason = "";
+        if (p.seq == null || p.seq.length() < 4) {
+            if (p.failReasons == null) p.failReasons = "";
+            p.pass = p.failReasons.isEmpty();
+            return;
+        }
+        for (Primer q : primers) {
+            if (q == p) continue;
+            if (q.seq == null || q.seq.length() < 4) continue;
+            boolean paired = p.ampliconId != null && p.ampliconId.equals(q.ampliconId);
+            boolean cross = !paired && p.chr != null && p.chr.equals(q.chr);
+            if (!paired && !cross) continue;
+            String key = p.seq + "\u0001" + q.seq;
+            double[] res = dimerCache.get(key);
+            if (res == null) {
+                res = new double[]{PrimerMetrics.dimerDG(p.seq, q.seq),
+                        PrimerMetrics.max3pComplement(p.seq, q.seq)};
+                if (dimerCache.size() > 200000) dimerCache.clear();
+                dimerCache.put(key, res);
+            }
+            int c3 = (int) res[1];
+            p.heteroDG = Math.min(p.heteroDG, res[0]);
+            p.max3pComp = Math.max(p.max3pComp, c3);
+            if (c3 >= failHetero3pTh || res[0] <= failHeteroDgTh) {
+                p.dimerReason = "二聚体(3'comp=" + c3 + ")";
+            }
+        }
+        if (p.failReasons == null) p.failReasons = "";
+        p.pass = p.failReasons.isEmpty() && p.dimerReason.isEmpty();
     }
 
     /**
@@ -378,7 +435,7 @@ public class PrimerStore {
         b.ampliconId = aid;
         a.pairWith = b.name;
         b.pairWith = a.name;
-        evaluatePairs();
+        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记（按需评估才重算，不跑 O(n²)）
         refresh();
         autosave(true);
     }
@@ -398,7 +455,7 @@ public class PrimerStore {
         if (members.size() - 2 < 2) {
             for (Primer q : members) clearPair(q);   // 剩余不足 2 条 → 整组散开
         }
-        evaluatePairs();
+        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
         refresh();
         autosave(true);
     }
@@ -435,7 +492,7 @@ public class PrimerStore {
         b.ampliconId = gid;
         a.pairWith = b.name;
         b.pairWith = a.name;
-        evaluatePairs();
+        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
         refresh();
         autosave(true);
     }
@@ -455,7 +512,7 @@ public class PrimerStore {
         if (p == null) return;
         if (p.ampliconId == null) return;   // 无配对：静默忽略
         unpairAll(p);
-        evaluatePairs();
+        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
         refresh();
         autosave(true);
     }
@@ -494,7 +551,7 @@ public class PrimerStore {
         if (rest.size() < 2) {                           // 其余不足 2 条 → 整组散开
             for (Primer q : rest) clearPair(q);
         }
-        evaluatePairs();
+        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
         refresh();
         autosave(true);
     }
@@ -535,7 +592,7 @@ public class PrimerStore {
             p.pairWith = null;
         }
         if (!any) return;
-        evaluatePairs();
+        resetDimerFlags();   // 全部取消配对：清二聚体标记
         refresh();
         autosave(true);
     }

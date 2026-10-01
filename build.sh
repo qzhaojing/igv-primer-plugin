@@ -6,7 +6,11 @@
 set -e
 
 JAVA8_HOME="${JAVA8_HOME:-/opt/jdk8}"                       # 含 bin/javac 的 Java 8 安装目录
-IGV_JAR="${IGV_JAR:-/opt/igv/lib/igv.jar}"                 # 你合法取得的 IGV 2.3.80 igv.jar
+# 重要：编译 classpath 必须用「干净 IGV jar」（不含任何本插件 class），否则 javac 会
+# 解析到 jar 内残留的旧版 PrimerStore/Primer，导致新加的方法/字段「找不到符号」或
+# 编译出缺引用的 class（v0.1.30 曾因此栽过跟头）。本目录的 _igv_base.jar 即由
+# _test_igv.jar 剔除 org/broad/igv/primer/* 后生成的干净基类。
+IGV_JAR="${IGV_JAR:-_igv_base.jar}"                        # 干净 IGV 2.3.80 jar（无插件类）
 SRC=src
 OUT=classes
 

@@ -29,8 +29,9 @@ public class Primer {
     public double selfDG = 0;
     public double heteroDG = 0;     // 与配对引物的异源二聚体
     public int max3pComp = 0;       // 与配对引物的最大 3' 互补碱基数
+    public String dimerReason = "";  // 二聚体失败原因（独立于 failReasons，便于按需评估后单独清除）
     public boolean pass = true;
-    public String failReasons = "";
+    public String failReasons = "";  // 长度/Tm/GC/hairpin/self 等非二聚体原因（PrimerMetrics.evaluate 设置）
 
     public Primer() {
     }
@@ -105,7 +106,8 @@ public class Primer {
         sb.append("  selfDG=").append(String.format("%.1f", selfDG));
         sb.append("  heteroDG=").append(String.format("%.1f", heteroDG));
         sb.append("  3'comp=").append(max3pComp);
-        if (!pass) sb.append("  FAIL: ").append(failReasons);
+        if (!failReasons.isEmpty()) sb.append("  FAIL: ").append(failReasons);
+        if (!dimerReason.isEmpty()) sb.append("  ").append(dimerReason);
         return sb.toString();
     }
 
@@ -122,6 +124,7 @@ public class Primer {
         p.selfDG = selfDG;
         p.heteroDG = heteroDG;
         p.max3pComp = max3pComp;
+        p.dimerReason = dimerReason;
         p.pass = pass;
         p.failReasons = failReasons;
         return p;

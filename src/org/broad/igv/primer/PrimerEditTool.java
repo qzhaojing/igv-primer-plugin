@@ -249,7 +249,6 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                             : (PrimerStore.screenRows.get(sel) != null ? PrimerStore.screenRows.get(sel) : 0);
                     sel.rowOverride = Math.max(0, base + dRow);
                 }
-                PrimerStore.evaluatePairs();
                 PrimerStore.refresh();
                 ke.consume();   // 阻止 IGV 原生方向键平移，避免双重响应
             }
@@ -457,7 +456,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             boolean changed = dragging.start != origStart || dragging.end != origEnd;
             if (changed) {
                 PrimerStore.refreshSequence(dragging);
-                PrimerStore.evaluatePairs();
+                PrimerStore.resetDimerFlags();   // 序列可能变化：清陈旧二聚体标记（按需评估才重算）
             }
             dragging = null;
             mode = MODE_NONE;

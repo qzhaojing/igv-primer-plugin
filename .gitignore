@@ -4,6 +4,9 @@ classes/
 # Test / injected jars (large, build artifacts — never commit)
 _test_igv.jar
 _test_igv.jar.*
+# Clean build classpath base & patched IGV (derived from user's IGV, large)
+_igv_base.jar
+igv_patched.jar
 *.bak-*
 
 # Build / install logs

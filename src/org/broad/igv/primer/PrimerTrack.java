@@ -798,7 +798,7 @@ public class PrimerTrack extends AbstractTrack {
                     PrimerStore.remove(hit);
                 }
             }));
-            menu.add(item("重新计算该引物参数", new Runnable() {
+            menu.add(item("评估二聚体（重算序列+全局）", new Runnable() {
                 public void run() {
                     PrimerStore.refreshSequence(hit);
                     PrimerStore.evaluatePairs();
