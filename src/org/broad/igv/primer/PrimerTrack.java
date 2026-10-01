@@ -239,13 +239,30 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /**
+     * v0.1.17：不绘制、仅按当前染色体计算引物轨所需高度（行布局与 render 一致），
+     * 供 PrimerStore.refresh() 判断"是否需要全量刷新"——仅当行数（高度）变化时才有必要调用昂贵的 doRefresh()。
+     */
+    public static int computeNeededHeight(String chr) {
+        if (chr == null) return 60;
+        java.util.List<Primer> vis = new java.util.ArrayList<Primer>();
+        for (Primer p : PrimerStore.getPrimers()) if (chr.equals(p.chr)) vis.add(p);
+        java.util.Collections.sort(vis, new java.util.Comparator<Primer>() {
+            public int compare(Primer a, Primer b) { return a.start - b.start; }
+        });
+        java.util.Map<Primer, Integer> rows = layoutRows(vis);
+        int nRows = 0;
+        for (Integer r : rows.values()) nRows = Math.max(nRows, r + 1);
+        return Math.max(60, nRows * ROW_H + 14);
+    }
+
+    /**
      * 配对感知行布局（v8）：
      *  - 重叠判定用【含测序延长区的扩展区间】（引物本体 ∪ readRegion），延长区占位、不被其他引物压住。
      *  - rowOverride（上下拖动手动指定行）最优先。
      *  - 配对组 size==2 强制同一行；size>2 各占独立行（曲线汇聚渲染）。
      *  - 未配对引物按"不重叠 + 同组"放同一行；重叠或异组 → 换行。
      */
-    private java.util.Map<Primer, Integer> layoutRows(List<Primer> vis) {
+    private static java.util.Map<Primer, Integer> layoutRows(List<Primer> vis) {
         java.util.Map<Primer, Integer> map = new java.util.HashMap<Primer, Integer>();
         java.util.List<java.util.List<Primer>> rows = new java.util.ArrayList<java.util.List<Primer>>();
 

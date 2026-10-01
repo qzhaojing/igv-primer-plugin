@@ -3,6 +3,7 @@ package org.broad.igv.primer;
 import org.broad.igv.feature.genome.Genome;
 import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
+import org.broad.igv.ui.panel.TrackPanel;
 
 import java.awt.Rectangle;
 import java.io.File;
@@ -159,10 +160,40 @@ public class PrimerStore {
         p.failReasons = (p.failReasons.isEmpty() ? "" : p.failReasons + " ") + reason;
     }
 
+    /**
+     * 轻量化刷新（v0.1.17）：
+     *  - 仅当引物轨"高度（行数）"发生变化（新增/删除导致出现或消失一行）时，才调用昂贵的 IGV.doRefresh()
+     *    （它会重绘全部轨道并重载数据，是添加/点击卡顿的根因）；
+     *  - 其余改动（改色/配对/选择/同排新增等不影响行数）只重绘引物轨自身所在面板，不碰其他 14 条轨道。
+     */
     public static void refresh() {
-        if (track != null) track.update();
-        IGV.getInstance().doRefresh();
+        if (track != null) {
+            int oldH = track.getHeight();
+            int newH = PrimerTrack.computeNeededHeight(lastChr);
+            track.update();
+            if (newH != oldH) {
+                IGV.getInstance().doRefresh();   // 行数变化 → 全量重排（重算各轨布局高度）
+            } else {
+                repaintTrackOnly();              // 仅引物轨区域重绘
+            }
+        } else {
+            IGV.getInstance().doRefresh();       // 未挂载轨时退回全量（兜底，极少触发）
+        }
         autosave(false);   // 节流自动保存，覆盖拖动/改色等变更
+    }
+
+    /** 仅重绘引物轨自身所在的 TrackPanel；取不到面板时退化为 repaintDataPanels（仍比重绘全部数据便宜）。 */
+    private static void repaintTrackOnly() {
+        if (track == null) return;
+        try {
+            TrackPanel tp = TrackPanel.getParentPanel(track);
+            if (tp != null) {
+                tp.repaint();
+                return;
+            }
+        } catch (Throwable ignore) {
+        }
+        IGV.getInstance().repaintDataPanels();
     }
 
     public static synchronized String nextName() {
