@@ -320,17 +320,19 @@ public class PrimerStore {
         }
     }
 
-    /** 返回 p 所在配对组的其他成员名称（逗号连接），用于编辑框预填。 */
+    /**
+     * 返回编辑框「配对引物名称」预填值：仅显示与本引物直接相连的对端名称（p.pairWith），
+     * 不再列出同扩增子组内的全部成员。v0.1.27：多条引物同组时只填"本引物这道连线的另一端"，
+     * 避免字段被整组名塞满。兜底：无 pairWith 但仍身处配对组时取同组任一其他成员名，
+     * 防止编辑保存时因字段为空而误删整组连线。
+     */
     public static synchronized String groupPartnerNames(Primer p) {
+        if (p.pairWith != null) return p.pairWith;
         if (p.ampliconId == null) return "";
-        StringBuilder sb = new StringBuilder();
         for (Primer q : primers) {
-            if (q != p && p.ampliconId.equals(q.ampliconId)) {
-                if (sb.length() > 0) sb.append(",");
-                sb.append(q.name);
-            }
+            if (q != p && p.ampliconId.equals(q.ampliconId)) return q.name;
         }
-        return sb.toString();
+        return "";
     }
 
     // ---------- Ctrl+点击 快捷配对（v0.1.2） ----------
