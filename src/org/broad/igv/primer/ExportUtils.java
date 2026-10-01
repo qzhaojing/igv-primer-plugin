@@ -52,8 +52,9 @@ public class ExportUtils {
         if (f == null) return;
         if (!confirmOverwrite(f)) return;
         try {
+            int n = PrimerStore.getPrimers().size();
             writeBED(f);
-            JOptionPane.showMessageDialog(null, "BED 已导出: " + f.getAbsolutePath()
+            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物到 BED: " + f.getAbsolutePath()
                     + "\n可直接拖入 IGV 查看（箭头方向/thick 测序区/颜色已含）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
@@ -109,6 +110,7 @@ public class ExportUtils {
         if (!confirmOverwrite(f)) return;
         try {
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
+            int n = 0;
             for (Primer p : PrimerStore.getPrimers()) {
                 String seq = primerSeq(p);
                 w.write(">" + p.name + "|" + p.role + "|" + p.rangeStr() + "|" + (p.strand == '+' ? "F" : "R")
@@ -121,9 +123,10 @@ public class ExportUtils {
                     w.write(seq.substring(i, Math.min(seq.length(), i + 60)));
                     w.newLine();
                 }
+                n++;
             }
             w.close();
-            JOptionPane.showMessageDialog(null, "引物序列已导出: " + f.getAbsolutePath());
+            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath());
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }
@@ -148,6 +151,7 @@ public class ExportUtils {
         }
         try {
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
+            int n = 0;
             for (Primer p : PrimerStore.getPrimers()) {
                 int[] rr = p.readRegion();
                 int s = Math.max(0, rr[0]);
@@ -162,9 +166,10 @@ public class ExportUtils {
                     w.write(read.substring(i, Math.min(read.length(), i + 60)));
                     w.newLine();
                 }
+                n++;
             }
             w.close();
-            JOptionPane.showMessageDialog(null, "测序读段已导出: " + f.getAbsolutePath());
+            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物的测序读段到: " + f.getAbsolutePath());
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }

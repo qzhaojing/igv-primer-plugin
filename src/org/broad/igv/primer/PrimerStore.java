@@ -5,6 +5,8 @@ import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
 import org.broad.igv.ui.panel.TrackPanel;
 
+import javax.swing.SwingUtilities;
+
 import java.awt.Rectangle;
 import java.io.File;
 import java.io.FileReader;
@@ -167,19 +169,33 @@ public class PrimerStore {
      *  - 其余改动（改色/配对/选择/同排新增等不影响行数）只重绘引物轨自身所在面板，不碰其他 14 条轨道。
      */
     public static void refresh() {
+        // 轻量化刷新（v0.1.17）：行数变化才全量 doRefresh，否则仅重绘引物轨面板。
+        // v0.1.18：doRefresh()/repaint() 必须在 EDT 执行；此处保证调用方无论在主线程还是后台线程都安全。
         if (track != null) {
-            int oldH = track.getHeight();
-            int newH = PrimerTrack.computeNeededHeight(lastChr);
+            final int oldH = track.getHeight();
+            final int newH = PrimerTrack.computeNeededHeight(lastChr);
             track.update();
             if (newH != oldH) {
-                IGV.getInstance().doRefresh();   // 行数变化 → 全量重排（重算各轨布局高度）
+                runOnEDT(new Runnable() {
+                    public void run() { IGV.getInstance().doRefresh(); }   // 行数变化 → 全量重排（重算各轨布局高度）
+                });
             } else {
-                repaintTrackOnly();              // 仅引物轨区域重绘
+                runOnEDT(new Runnable() {
+                    public void run() { repaintTrackOnly(); }              // 仅引物轨区域重绘
+                });
             }
         } else {
-            IGV.getInstance().doRefresh();       // 未挂载轨时退回全量（兜底，极少触发）
+            runOnEDT(new Runnable() {
+                public void run() { IGV.getInstance().doRefresh(); }       // 未挂载轨时退回全量（兜底，极少触发）
+            });
         }
-        autosave(false);   // 节流自动保存，覆盖拖动/改色等变更
+        autosave(false);   // 节流自动保存（磁盘 I/O，保持同步、不进 EDT）
+    }
+
+    /** 在 EDT 上执行 r；若当前已是 EDT 则立即执行。使 refresh() 对后台线程调用方同样安全。 */
+    private static void runOnEDT(Runnable r) {
+        if (SwingUtilities.isEventDispatchThread()) r.run();
+        else SwingUtilities.invokeLater(r);
     }
 
     /** 仅重绘引物轨自身所在的 TrackPanel；取不到面板时退化为 repaintDataPanels（仍比重绘全部数据便宜）。 */
@@ -437,6 +453,31 @@ public class PrimerStore {
         if (rest.size() < 2) {
             for (Primer q : rest) clearPair(q);
         }
+    }
+
+    /**
+     * v0.1.18：右键「取消该引物配对」——只把该引物移出其配对组、断开与之相关的所有连线，
+     *  同组其余成员之间的连线（若仍 >=2 条）保留，不被一并散开。
+     *  与 unpairAllFor（整组散开）的区别：仅影响该引物的连线，不波及其他成员间关系。
+     *  未配对引物静默忽略；跨线程调用安全（经由线程安全的 refresh）。
+     */
+    public static synchronized void unpairForSelected(Primer p) {
+        if (p == null || p.ampliconId == null) return;   // 未配对：静默忽略
+        String gid = p.ampliconId;
+        List<Primer> rest = new ArrayList<Primer>();
+        for (Primer q : primers) {
+            if (q != p && gid.equals(q.ampliconId)) rest.add(q);
+        }
+        clearPair(p);                                    // 清该引物自身配对
+        for (Primer q : rest) {                          // 清伙伴指向该引物的 pairWith，避免悬空指针
+            if (p.name.equals(q.pairWith)) q.pairWith = null;
+        }
+        if (rest.size() < 2) {                           // 其余不足 2 条 → 整组散开
+            for (Primer q : rest) clearPair(q);
+        }
+        evaluatePairs();
+        refresh();
+        autosave(true);
     }
 
     private static void clearPair(Primer p) {

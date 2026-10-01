@@ -553,6 +553,18 @@ public class PrimerTrack extends AbstractTrack {
                     PrimerStore.duplicate(hit);
                 }
             }));
+            // v0.1.18：取消该引物配对——只断开与之相关的连线；同组其余成员间连线（>=2 条时）保留
+            menu.add(item("取消该引物配对（仅断开相关连线）", new Runnable() {
+                public void run() {
+                    if (hit.ampliconId == null) {
+                        JOptionPane.showMessageDialog(null, "该引物未参与任何配对。");
+                        return;
+                    }
+                    PrimerStore.unpairForSelected(hit);
+                    JOptionPane.showMessageDialog(null,
+                            "已取消「" + hit.name + "」相关的配对连线；其余成员之间的连线（如有）保留。");
+                }
+            }));
             // v8：颜色一行 12 常用色，点击即换该引物颜色
             JPanel colorRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
             colorRow.setOpaque(false);
