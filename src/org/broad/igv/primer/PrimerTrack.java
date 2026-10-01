@@ -86,13 +86,13 @@ public class PrimerTrack extends AbstractTrack {
                 int len = hi - lo;
                 g.setColor(Color.DARK_GRAY);
                 g.setFont(g.getFont().deriveFont(11f));
-                // v0.1.25：长度标签贴「曲线拱顶点」(quadPeak，由较高引物 min(ya,yb) 决定)，
-                // 基线 = 拱顶 + ascent + 5 → 字顶距曲线恒 5px
+                // v0.1.26：长度标签置于曲线中点(t=0.5)下方 5px——多条连线时各中点沿曲线天然错开，不拥挤
                 String lenTxt = formatLen(len);
                 java.awt.FontMetrics fm = g.getFontMetrics(g.getFont());
-                double[] pk = quadPeak(x1, ya, cx, cy, x2, yb);
-                g.drawString(lenTxt, (int) (pk[0] - fm.stringWidth(lenTxt) / 2),
-                        (int) (pk[1]) + fm.getAscent() + 5);
+                double mx2 = 0.25 * x1 + 0.5 * cx + 0.25 * x2;
+                double my2 = 0.25 * ya + 0.5 * cy + 0.25 * yb;
+                g.drawString(lenTxt, (int) (mx2 - fm.stringWidth(lenTxt) / 2),
+                        (int) (my2) + fm.getAscent() + 5);
                 g.setFont(g.getFont().deriveFont(10f));
             } else {
                 // v8 曲线汇聚：hub = R2 角色（没有则取居中成员）；其余成员用二次贝塞尔曲线平滑汇聚到 hub
@@ -123,11 +123,12 @@ public class PrimerTrack extends AbstractTrack {
                     g.setFont(g.getFont().deriveFont(11f));
                     g.setColor(c.darker());
                     String slen = formatLen(len);
-                    // v0.1.25：spoke 长度标签同样贴拱顶点，字顶距曲线恒 5px（与 size==2 一致）
+                    // v0.1.26：同 size==2，标签置于曲线中点(t=0.5)下方 5px，多条 spoke 天然错开
                     java.awt.FontMetrics fmS = g.getFontMetrics(g.getFont());
-                    double[] spk = quadPeak(xS, yS, cx, cy, xHub, yHub);
-                    g.drawString(slen, (int) (spk[0] - fmS.stringWidth(slen) / 2),
-                            (int) (spk[1]) + fmS.getAscent() + 5);
+                    double mx = 0.25 * xS + 0.5 * cx + 0.25 * xHub;
+                    double my = 0.25 * yS + 0.5 * cy + 0.25 * yHub;
+                    g.drawString(slen, (int) (mx - fmS.stringWidth(slen) / 2),
+                            (int) (my) + fmS.getAscent() + 5);
                     // 箭头指向 hub 侧（曲线终点附近）
                     drawDirArrow(g, xHub + (xS < xHub ? -6 : 6), yHub + (yS < yHub ? -4 : 4),
                             xS < xHub ? -1 : 1, c);
@@ -414,25 +415,6 @@ public class PrimerTrack extends AbstractTrack {
     /** v0.1.3：长度格式化 —— <1000 显示 "N bp"，否则 "x.xx kb" */
     static String formatLen(int len) {
         return len < 1000 ? len + " bp" : String.format("%.2f kb", len / 1000.0);
-    }
-
-    /**
-     * 二次贝塞尔曲线 (P0=(x0,y0) 控制 P1=(x1,y1) P2=(x2,y2)) 的极值点（曲线最高/最上处）。
-     * 当两端 y 不同时，极值偏向 y 较小（屏幕更高）那一端——即「较高引物」一侧，
-     * 因此用该点放置 PCR 产物长度标签，会自然贴住较高引物对应的曲线拱顶。
-     */
-    private static double[] quadPeak(double x0, double y0, double x1, double y1, double x2, double y2) {
-        double denom = 2 * y1 - y0 - y2;
-        double t;
-        if (Math.abs(denom) < 1e-6) t = 0.5;            // 对称：极值在中点
-        else {
-            t = (y1 - y0) / denom;
-            if (t < 0) t = 0; else if (t > 1) t = 1;
-        }
-        double mt = 1 - t;
-        double x = mt * mt * x0 + 2 * mt * t * x1 + t * t * x2;
-        double y = mt * mt * y0 + 2 * mt * t * y1 + t * t * y2;
-        return new double[]{x, y};
     }
 
     /** v0.1.14：测序长度输入对话框，返回 {R1, R2, 含引物长度(1/0)}；取消返回 null。 */
