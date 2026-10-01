@@ -146,17 +146,28 @@ public class PrimerTrack extends AbstractTrack {
             drawPrimer(ctx, g, rect, p, rows.get(p));
         }
 
-        // 3) 顶部参数工具条（常驻按钮栏）：等价于右键部分常用项，且不受编辑模式开关影响
+        // 3) 顶部参数工具条（常驻按钮栏 + 两个圆角参数框）：等价于右键部分常用项，且不受编辑模式开关影响
         Rectangle bar = new Rectangle(rect.x, rect.y, rect.width, TOOLBAR_H);
         toolbarRect = bar;
         toolbarChr = chr;
         toolbarBtns.clear();
+        toolbarBoxes.clear();
+        toolbarFields.clear();
+        // 安装全局键盘分发器：仅当某文本框聚焦时拦截按键用于编辑（首次渲染安装一次）
+        if (!kbdInstalled) {
+            try {
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(primerKbd);
+                kbdInstalled = true;
+            } catch (Throwable ignore) { }
+        }
+        java.util.List<ToolbarBtn> btns = toolbarLayout(bar);   // 同时写入 toolbarBtns 映射与 toolbarBtnsEndX
+        layoutBoxes(bar);                                      // 计算两个圆角参数框（依赖 toolbarBtnsEndX）
         g.setColor(new Color(238, 238, 238));
         g.fillRect(bar.x, bar.y, bar.width, bar.height);
         g.setColor(new Color(180, 180, 180));
         g.drawLine(bar.x, bar.y + bar.height - 1, bar.x + bar.width, bar.y + bar.height - 1);
         g.setFont(g.getFont().deriveFont(10f));
-        for (ToolbarBtn b : toolbarLayout(bar)) {
+        for (ToolbarBtn b : btns) {
             toolbarBtns.put(b.id, b.rect);
             g.setColor(b.on ? new Color(200, 235, 200) : new Color(248, 248, 248));
             g.fillRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
@@ -166,14 +177,15 @@ public class PrimerTrack extends AbstractTrack {
             int tw = g.getFontMetrics(g.getFont()).stringWidth(b.label);
             g.drawString(b.label, b.rect.x + (b.rect.width - tw) / 2, b.rect.y + b.rect.height - 4);
         }
+        drawToolbarBoxes(g);   // 绘制两个圆角参数框（含文本输入框与设置按钮）
     }
 
-    /** 计算工具条按钮布局（render 与点击处理共用，保证位置一致）。 */
+    /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
     private static java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
         java.util.List<ToolbarBtn> out = new java.util.ArrayList<ToolbarBtn>();
         int x = bar.x + 4;
-        int y = bar.y + 3;
-        int h = TOOLBAR_H - 6;
+        int y = bar.y + 4;
+        int h = TOOLBAR_H - 8;
         java.util.Map<String, String> defs = new java.util.LinkedHashMap<String, String>();
         boolean inEdit = PrimerEditTool.inEditMode();
         defs.put("edit", inEdit ? "退出编辑" : "进入编辑");
@@ -191,6 +203,7 @@ public class PrimerTrack extends AbstractTrack {
             out.add(new ToolbarBtn(id, label, on, new Rectangle(x, y, w, h)));
             x += w + 4;
         }
+        toolbarBtnsEndX = x;
         return out;
     }
 
@@ -207,7 +220,10 @@ public class PrimerTrack extends AbstractTrack {
     };
 
     /** v0.1.19：track 顶部参数工具条高度（一条常驻按钮栏，等价于右键部分常用项，且不受编辑模式开关影响） */
-    public static final int TOOLBAR_H = 20;
+    public static final int TOOLBAR_H = 28;
+    private static final int FLD_W = 34;     // 文本框宽度（容纳 3-4 位数字）
+    private static final int FLD_H = 18;     // 文本框高度
+    private static final int SET_W = 38;     // “设置”按钮宽度
     private static Rectangle toolbarRect = null;          // 工具条背景矩形（屏幕坐标，随渲染更新）
     private static String toolbarChr = null;             // 该矩形对应的染色体
     private static final java.util.Map<String, Rectangle> toolbarBtns =
@@ -221,6 +237,172 @@ public class PrimerTrack extends AbstractTrack {
         ToolbarBtn(String id, String label, boolean on, Rectangle rect) {
             this.id = id; this.label = label; this.on = on; this.rect = rect;
         }
+    }
+
+    // ---- v0.1.21：顶部两个圆角参数框（文本框 + 设置按钮） ----
+    /** 圆角框内单个文本框（带左侧标签） */
+    private static class TBField {
+        String id, label;
+        Rectangle rect;
+        TBField(String id, String label, Rectangle rect) {
+            this.id = id; this.label = label; this.rect = rect;
+        }
+    }
+    /** 一个圆角参数框：含若干文本框 + 一个“设置”按钮 */
+    private static class TBBox {
+        Rectangle rect;            // 圆角框整体矩形
+        java.util.List<TBField> fields;   // 框内文本框（含标签）
+        Rectangle setBtn;          // “设置”按钮矩形
+        String setAction;          // runToolbar 动作 id
+        TBBox(Rectangle rect, java.util.List<TBField> fields, Rectangle setBtn, String setAction) {
+            this.rect = rect; this.fields = fields; this.setBtn = setBtn; this.setAction = setAction;
+        }
+    }
+    private static final java.util.List<TBBox> toolbarBoxes = new java.util.ArrayList<TBBox>();
+    private static final java.util.Map<String, Rectangle> toolbarFields = new java.util.HashMap<String, Rectangle>();
+    private static final java.util.Map<String, String> fieldValues = new java.util.LinkedHashMap<String, String>();
+    private static boolean fieldValuesInit = false;
+    private static String focusedFieldId = null;
+    private static int toolbarBtnsEndX = 0;
+    private static boolean kbdInstalled = false;
+
+    /** 全局键盘分发器：仅当某个文本框聚焦时拦截按键用于编辑；其余情况放行（return false）。 */
+    private static final java.awt.KeyEventDispatcher primerKbd = new java.awt.KeyEventDispatcher() {
+        public boolean dispatchKeyEvent(java.awt.event.KeyEvent e) {
+            if (focusedFieldId == null) return false;
+            int id = e.getID();
+            if (id == java.awt.event.KeyEvent.KEY_PRESSED) {
+                int code = e.getKeyCode();
+                if (code == java.awt.event.KeyEvent.VK_ESCAPE) { focusedFieldId = null; PrimerStore.refresh(); return true; }
+                if (code == java.awt.event.KeyEvent.VK_ENTER) { focusedFieldId = null; PrimerStore.refresh(); return true; }
+                if (code == java.awt.event.KeyEvent.VK_BACK_SPACE) {
+                    String v = fieldValues.get(focusedFieldId);
+                    if (v != null && v.length() > 0) fieldValues.put(focusedFieldId, v.substring(0, v.length() - 1));
+                    PrimerStore.refresh();
+                    return true;
+                }
+                return true;   // 聚焦期间吞掉其余按键（避免误触发 IGV 快捷键）
+            }
+            if (id == java.awt.event.KeyEvent.KEY_TYPED) {
+                char c = e.getKeyChar();
+                if (c == '\b') return true;
+                if (Character.isDigit(c) || c == '.' || c == '-') {
+                    String v = fieldValues.get(focusedFieldId);
+                    if (v == null) v = "";
+                    boolean ok = v.length() < 7 && !(c == '.' && v.contains(".")) && !(c == '-' && v.length() > 0);
+                    if (ok) fieldValues.put(focusedFieldId, v + c);
+                    PrimerStore.refresh();
+                    return true;
+                }
+                return true;   // 吞掉非数字字符
+            }
+            return false;
+        }
+    };
+
+    /** 首次渲染时把文本框初值设为当前 PrimerStore 默认/阈值 */
+    private static void initFieldValues() {
+        fieldValues.put("r1", String.valueOf(PrimerStore.defaultReadF));
+        fieldValues.put("r2", String.valueOf(PrimerStore.defaultReadR));
+        fieldValues.put("gcMin", String.valueOf(PrimerStore.failGcMin));
+        fieldValues.put("gcMax", String.valueOf(PrimerStore.failGcMax));
+        fieldValues.put("tmMin", String.valueOf(PrimerStore.failTmMin));
+        fieldValues.put("tmMax", String.valueOf(PrimerStore.failTmMax));
+        fieldValues.put("lenMin", String.valueOf(PrimerStore.failLenMin));
+        fieldValues.put("lenMax", String.valueOf(PrimerStore.failLenMax));
+    }
+
+    /** 计算两个圆角参数框的布局（矩形），写入 toolbarBoxes 与 toolbarFields；依赖 toolbarBtnsEndX。 */
+    private static void layoutBoxes(Rectangle bar) {
+        if (!fieldValuesInit) { initFieldValues(); fieldValuesInit = true; }
+        int baseY = bar.y + (bar.height - FLD_H) / 2;
+        // ---- 框1：测序长度（R1 / R2 + 设置） ----
+        int x = toolbarBtnsEndX + 8;
+        int pad = 6;
+        int ix = x + pad;
+        int lblW = 14;
+        Rectangle r1 = new Rectangle(ix + lblW + 2, baseY, FLD_W, FLD_H);
+        Rectangle r2 = new Rectangle(r1.x + FLD_W + 4 + lblW + 2, baseY, FLD_W, FLD_H);
+        Rectangle s1 = new Rectangle(r2.x + FLD_W + 6, baseY, SET_W, FLD_H);
+        int box1W = (s1.x + SET_W + pad) - x;
+        java.util.List<TBField> f1 = new java.util.ArrayList<TBField>();
+        f1.add(new TBField("r1", "R1", r1));
+        f1.add(new TBField("r2", "R2", r2));
+        toolbarBoxes.add(new TBBox(new Rectangle(x, bar.y + 2, box1W, bar.height - 4), f1, s1, "setRead"));
+        // ---- 框2：失败阈值（GC / Tm / 长度，各 下限+上限 + 设置） ----
+        int x2 = x + box1W + 8;
+        int ix2 = x2 + pad;
+        int lblW2 = 16;
+        Rectangle gcMin = new Rectangle(ix2 + lblW2 + 2, baseY, FLD_W, FLD_H);
+        Rectangle gcMax = new Rectangle(gcMin.x + FLD_W + 2, baseY, FLD_W, FLD_H);
+        Rectangle tmMin = new Rectangle(gcMax.x + FLD_W + 4 + lblW2 + 2, baseY, FLD_W, FLD_H);
+        Rectangle tmMax = new Rectangle(tmMin.x + FLD_W + 2, baseY, FLD_W, FLD_H);
+        Rectangle lenMin = new Rectangle(tmMax.x + FLD_W + 4 + 14 + 2, baseY, FLD_W, FLD_H);
+        Rectangle lenMax = new Rectangle(lenMin.x + FLD_W + 2, baseY, FLD_W, FLD_H);
+        Rectangle s2 = new Rectangle(lenMax.x + FLD_W + 6, baseY, SET_W, FLD_H);
+        int box2W = (s2.x + SET_W + pad) - x2;
+        java.util.List<TBField> f2 = new java.util.ArrayList<TBField>();
+        f2.add(new TBField("gcMin", "GC", gcMin));
+        f2.add(new TBField("gcMax", "", gcMax));
+        f2.add(new TBField("tmMin", "Tm", tmMin));
+        f2.add(new TBField("tmMax", "", tmMax));
+        f2.add(new TBField("lenMin", "长", lenMin));
+        f2.add(new TBField("lenMax", "", lenMax));
+        toolbarBoxes.add(new TBBox(new Rectangle(x2, bar.y + 2, box2W, bar.height - 4), f2, s2, "setFail"));
+        for (TBBox b : toolbarBoxes) for (TBField f : b.fields) toolbarFields.put(f.id, f.rect);
+    }
+
+    /** 绘制两个圆角参数框（背景框 + 文本框 + 设置按钮） */
+    private static void drawToolbarBoxes(Graphics2D g) {
+        for (TBBox box : toolbarBoxes) {
+            g.setColor(new Color(232, 236, 244));
+            g.fillRoundRect(box.rect.x, box.rect.y, box.rect.width, box.rect.height, 8, 8);
+            g.setColor(new Color(150, 160, 185));
+            g.drawRoundRect(box.rect.x, box.rect.y, box.rect.width, box.rect.height, 8, 8);
+            for (TBField f : box.fields) {
+                if (f.label != null && !f.label.isEmpty()) {
+                    g.setColor(Color.DARK_GRAY);
+                    g.setFont(g.getFont().deriveFont(9f));
+                    int lw = g.getFontMetrics(g.getFont()).stringWidth(f.label);
+                    g.drawString(f.label, f.rect.x - lw - 2, f.rect.y + f.rect.height - 4);
+                }
+                g.setColor(Color.WHITE);
+                g.fillRect(f.rect.x, f.rect.y, f.rect.width, f.rect.height);
+                g.setColor(focusedFieldId != null && focusedFieldId.equals(f.id)
+                        ? new Color(110, 150, 255) : new Color(170, 170, 170));
+                g.drawRect(f.rect.x, f.rect.y, f.rect.width, f.rect.height);
+                g.setColor(Color.BLACK);
+                g.setFont(g.getFont().deriveFont(11f));
+                String v = fieldValues.get(f.id); if (v == null) v = "";
+                g.drawString(v, f.rect.x + 3, f.rect.y + f.rect.height - 4);
+                if (focusedFieldId != null && focusedFieldId.equals(f.id)) {
+                    int cw = g.getFontMetrics(g.getFont()).stringWidth(v);
+                    g.drawLine(f.rect.x + 3 + cw + 1, f.rect.y + 2, f.rect.x + 3 + cw + 1, f.rect.y + f.rect.height - 3);
+                }
+                g.setFont(g.getFont().deriveFont(10f));
+            }
+            Rectangle sb = box.setBtn;
+            g.setColor(new Color(200, 220, 255));
+            g.fillRect(sb.x, sb.y, sb.width, sb.height);
+            g.setColor(new Color(60, 100, 180));
+            g.drawRect(sb.x, sb.y, sb.width, sb.height);
+            g.setColor(Color.DARK_GRAY);
+            g.setFont(g.getFont().deriveFont(10f));
+            String t = "设置";
+            int tw = g.getFontMetrics(g.getFont()).stringWidth(t);
+            g.drawString(t, sb.x + (sb.width - tw) / 2, sb.y + sb.height - 4);
+        }
+    }
+
+    private static int parseIntField(String id, int dflt) {
+        String v = fieldValues.get(id);
+        if (v == null || v.trim().isEmpty()) return dflt;
+        return Integer.parseInt(v.trim());
+    }
+    private static double parseDblField(String id, double dflt) {
+        String v = fieldValues.get(id);
+        if (v == null || v.trim().isEmpty()) return dflt;
+        return Double.parseDouble(v.trim());
     }
 
     /** v0.1.3：长度格式化 —— <1000 显示 "N bp"，否则 "x.xx kb" */
@@ -865,12 +1047,37 @@ public class PrimerTrack extends AbstractTrack {
         if (toolbarRect == null || !e.getFrame().getChrName().equals(toolbarChr)) return false;
         java.awt.event.MouseEvent me = e.getMouseEvent();
         int x = me.getX(), y = me.getY();
+        // 1) 圆角框内文本框：点击聚焦，进入键盘输入模式
+        for (TBBox box : toolbarBoxes) {
+            for (TBField f : box.fields) {
+                if (f.rect.contains(x, y)) {
+                    focusedFieldId = f.id;
+                    PrimerStore.refresh();
+                    return true;
+                }
+            }
+            // 2) 圆角框“设置”按钮
+            if (box.setBtn.contains(x, y)) {
+                runToolbar(box.setAction);
+                focusedFieldId = null;
+                return true;
+            }
+        }
+        // 3) 左侧动作按钮
         for (java.util.Map.Entry<String, Rectangle> en : toolbarBtns.entrySet()) {
             if (en.getValue().contains(x, y)) {
+                focusedFieldId = null;
                 runToolbar(en.getKey());
                 return true;
             }
         }
+        // 4) 点工具条空白处：取消文本框聚焦（不再误吞按键），并消费该点击（不触发平移）
+        if (toolbarRect.contains(x, y)) {
+            focusedFieldId = null;
+            PrimerStore.refresh();
+            return true;
+        }
+        focusedFieldId = null;   // 点轨道其它区域也取消聚焦
         return false;
     }
 
@@ -889,6 +1096,32 @@ public class PrimerTrack extends AbstractTrack {
             ExportUtils.exportBED();
         } else if ("imp".equals(id)) {
             ExportUtils.importBED();
+        } else if ("setRead".equals(id)) {
+            try {
+                int r1 = Math.max(0, parseIntField("r1", PrimerStore.defaultReadF));
+                int r2 = Math.max(0, parseIntField("r2", PrimerStore.defaultReadR));
+                PrimerStore.setReadLenByRole(r1, r2, PrimerStore.defaultIncludeLen);
+                JOptionPane.showMessageDialog(null, "已设置全部引物测序长度：R1=" + r1 + " nt, R2=" + r2
+                        + " nt（含引物长度=" + PrimerStore.defaultIncludeLen + "），并写入默认配置。");
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(null, "测序长度输入格式错误：" + ex.getMessage(),
+                        "格式错误", JOptionPane.ERROR_MESSAGE);
+            }
+        } else if ("setFail".equals(id)) {
+            try {
+                PrimerStore.failGcMin = parseDblField("gcMin", PrimerStore.failGcMin);
+                PrimerStore.failGcMax = parseDblField("gcMax", PrimerStore.failGcMax);
+                PrimerStore.failTmMin = parseDblField("tmMin", PrimerStore.failTmMin);
+                PrimerStore.failTmMax = parseDblField("tmMax", PrimerStore.failTmMax);
+                PrimerStore.failLenMin = (int) parseDblField("lenMin", PrimerStore.failLenMin);
+                PrimerStore.failLenMax = (int) parseDblField("lenMax", PrimerStore.failLenMax);
+                PrimerStore.saveFailConfig();
+                PrimerStore.refreshAll();
+                JOptionPane.showMessageDialog(null, "已更新失败判定阈值（GC/Tm/长度 的上下限）并重新评估全部引物。");
+            } catch (NumberFormatException ex) {
+                JOptionPane.showMessageDialog(null, "阈值输入格式错误：" + ex.getMessage(),
+                        "格式错误", JOptionPane.ERROR_MESSAGE);
+            }
         }
     }
 
