@@ -29,3 +29,8 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 
 echo "== 编译成功 =="
 ls "$OUT"/org/broad/igv/primer/
+
+# v0.1.25：重打包 PrimerPlugin.jar（install.py 的注入源；此前漏了这步导致注入的一直是旧类）
+rm -f PrimerPlugin.jar
+"$JAVA8_HOME/bin/jar" cf PrimerPlugin.jar -C "$OUT" org/
+echo "== 打包 PrimerPlugin.jar 完成 =="
