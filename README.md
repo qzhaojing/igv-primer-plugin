@@ -1,12 +1,93 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.7]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.34]
 
 ## 状态
-- 版本 **v0.1.7**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.34**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
 - 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
-- 启动 IGV 后「Primers 引物」轨自动出现（空轨，在数据面板里）。
+- 启动 IGV 后「Primers」轨自动出现（空轨，在数据面板里）。
 - ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
+
+## 更新日志（v0.1.8 – v0.1.34，按版本倒序）
+
+### v0.1.34 修复 session 打开崩溃根因（中文路径 GBK）+ 引物轨自动恢复守护
+- 修复 `open session` 报 `MalformedByteSequenceException` 的根因：IGV 在 Windows 把含中文目录名的数据文件路径以平台 GBK 编码写进 session，却按 UTF-8 读回 → 把损坏的 session 文件整体按 GBK 解码、再以 UTF-8 重编码即可修复（路径含中文目录名时尤其明显）。
+- 新增「引物轨守护」：`PrimerPlugin` 启动后用 `javax.swing.Timer`（1.5s）轮询 `IGV` 各面板，发现 `Primers` 轨被移除（如 open session 场景）时自动重建并 `addTracks`，引物轨不再丢失。
+
+### v0.1.33 轨名改纯 ASCII，避免 session XML 编码问题
+- `PrimerTrack` 名称由 `Primers 引物` 改为纯 ASCII `Primers`，规避 JAXB 把中文名写入 session XML 引发的编码问题（open session 不丢 primer track 的第一道防线）。
+
+### v0.1.32 视觉降噪
+- fail 红色外框：由深红（`Color.RED`、2px）改为浅红（`0xE89A9A`、1px 细线）。
+- 引物名称颜色统一为冷静深蓝灰（`0x2E4A62`，fail 也不再红字）。
+- 去掉连线端点 `P1/P2` 标注与 `hub×N` 小字（保留 hub 圆点与颜色轮换）。
+
+### v0.1.31 标签精简 + 详细信息移入悬停框
+- 引物标签只显示名称，去掉冗余参数；详情（方向/角色/配对组、位置长度、Tm/GC、hairpin/self/异源二聚体/3'互补、测序长度、来源、状态、序列）移入鼠标悬停信息框（`getValueStringAt` tooltip，需在 IGV 菜单 **View → Show Details on Hover** 开启）。
+
+### v0.1.30 二聚体评估按需触发 + 编辑面板分区
+- 二聚体评估由每次 O(n²) 全量改为**按需触发**（仅相关改动时计算），大批量引物不再卡顿。
+- 添加/编辑面板分区显示：序列 + 二聚体评估情况，一目了然。
+- 修复编译 classpath 污染：引入干净 `_igv_base.jar`（剔除旧插件类）作编译基线，避免 javac 解析到陈旧 `PrimerStore`（曾导致新加方法"找不到符号"）。
+
+### v0.1.29 修复严重卡死
+- 修复 `render` 与 `computeNeededHeight` 高度公式错位（`TOOLBAR_H`）导致轻量刷新失效、每次都全量 `doRefresh` 的卡死；`evaluatePairs` 加 `dimerCache` 缓存 + 空序列跳过。
+
+### v0.1.28 移除 Ctrl+Shift+点击清整组
+- 为避免误触，Ctrl+Shift+点击 改为仅等同 Ctrl+点击 的 toggle 行为（不再整组清除）。
+
+### v0.1.27 配对字段只显示对端 + Ctrl 点击 toggle
+- 编辑框"配对引物名称"只显示本引物连线的对端（`pairWith`）；Ctrl+点击 切换配对连线（toggle）。
+
+### v0.1.26 长度标签位置微调
+- 长度标签改回曲线中点（`t=0.5`）下方 5px，避免多 spoke 在拱顶拥挤；移除 quadPeak。
+
+### v0.1.25 长度标签贴拱顶 + 修复打包遗漏
+- 长度标签贴曲线拱顶 +5px 间距；修复 `build.sh` 漏打包 `PrimerPlugin.jar` 导致注入旧类的关键 bug。
+
+### v0.1.21 顶部工具条参数框
+- 顶部工具条加两个圆角参数框（R1/R2 测序长度；GC/Tm/长度阈值），文本框 + 设置按钮，canvas 绘制 + 全局键盘输入。
+
+### v0.1.20 修复编辑模式卡死 + 默认不自动进入
+- 修复编辑模式卡在"退出"（`exitEditMode` 置空 instance）的问题；**默认不再自动进入编辑模式**（防误触），需右键「进入引物编辑模式」或点工具条按钮激活。
+
+### v0.1.19 编辑模式单一入口 + 顶部工具条
+- 编辑模式改为单一切换入口；track 顶部新增参数工具条（编辑/序列/自动存/导出/导入），与编辑模式解耦。
+
+### v0.1.18 导出条数提示 + 线程安全 + 取消配对
+- 导出增加条数提示；`refresh` 线程安全收口；右键新增「取消选定引物配对」（仅断相关连线）。
+
+### v0.1.17 轻量化刷新
+- 仅引物轨面板重绘，仅行数变化才全量 `doRefresh`，大批量引物拖动更流畅。
+
+### v0.1.16 复制引物 + 名称查重 + fail 描边
+- 复制选定引物（下方生成、名称末位 +1）；名称重复实时检测禁用保存；失败标记由红框改引物轮廓描红。
+
+### v0.1.15 导出覆盖提示 + fail 阈值可配 + 视觉微调
+- 导出覆盖提示；fail 阈值可配；红框改椭圆；字体加大；曲线长度标注下移。
+
+### v0.1.14 批量测序长度按「套」生效
+- 右键批量「设置本套测序长度」只作用于命中引物所属 BED 套（`Primer.group`），不污染其他套；单条编辑不再覆盖公共默认值（避免默认值逐条漂移）。
+
+### v0.1.13 新增引物起点对齐鼠标 + 右键统一设全长
+- 新增引物起点（左端）= 鼠标坐标（原为中心对齐）；右键「设置全套测序长度 (R1/R2)...」按角色分别赋值、写入默认配置，新增引物自动沿用。
+
+### v0.1.12 修复 1v多 连线不出现
+- 移除 AWT 层鼠标拦截（`consume()` 阻止事件派发到组件 `MouseListener`，导致 Ctrl+点击 永远到不了 `mousePressed`）；配对改由 `PrimerEditTool.mousePressed` 正常处理（事件由本工具独占，不触发 IGV 缩放）。
+
+### v0.1.11 1v多配对 + 阻止 IGV 原生缩放
+- Ctrl+点击 改为增量配对 `mergePair`（实现 1 对多）；Ctrl+Shift+点击 仅解除所在配对组；AWT 层拦截 Ctrl+点击 鼠标事件，吞掉 IGV 原生 pan/zoom 响应。
+
+### v0.1.10 恢复 1对1 拱形连线
+- 1对1 组恢复二次贝塞尔 QuadCurve2D 拱形（与 1v多 汇聚风格一致）；PCR 产物长度标注移至拱顶上方，方向箭头跟随曲线两端。
+
+### v0.1.9 修复编辑清空配对残留
+- 新增 `PrimerStore.detach()`：编辑保存时先摘出旧配对组再按填写 `linkByNames`，清空即真正取消配对；删除引物清理孤立配对组防悬空连线。
+
+### v0.1.8 引物批量操作
+- 新增右键批量操作（批量新增 / 删除 / 设测序长度等）。
+
+> 注：v0.1.22–v0.1.24 未单独提交，功能并入 v0.1.25；期间 `docs/` 新增 IGV 2.4/3.0 插件机制调研与 3.0 小 PR 候选清单（不影响插件运行）。
 
 ## v0.1.7 更新（取消配对：一条删，两边清）
 - **Ctrl+Shift+单击任意一条已配对引物**：解除它的全部配对——配对另一方的配对关系**同时清除**（双向清 `ampliconId` 与 `pairWith`，整组散开）。
@@ -53,7 +134,7 @@
 ## 功能与操作
 
 ### 启动后
-IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
+IGV 启动即出现 **"Primers"** 轨（空轨，在数据面板里）。
 
 ### 右键 Primers 轨（任何时候可用）
 | 菜单项 | 说明 |
@@ -67,7 +148,7 @@ IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
 | 导入 BED | 恢复之前设计继续编辑；**BED name 内嵌的 `|p配对名` 会自动回链配对**（按名重连扩增子 ID，连线/异源二聚体复原） |
 | 退出引物编辑模式 | 恢复 IGV 默认工具（拖拽缩放） |
 
-### 编辑操作（v4：启动即生效；**所有引物均可拖拽/缩放**，空白处拖动 = 正常平移视图）
+### 编辑操作（进入编辑模式即生效；**所有引物均可拖拽/缩放**，空白处拖动 = 正常平移视图）
 - **悬停引物两端**（±6px）= 双向箭头光标 → 拖动 = 缩放引物长度
 - **悬停/按住引物本体** = 移动光标 → 固定长度左右拖动，放开即固定新位置
 - **单击** 引物 = 选中（出现橙色端点手柄 + 高亮框）
@@ -83,7 +164,7 @@ IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
 选中一条引物后（橙色端点手柄出现），用方向键**精确移动**，不会像鼠标拖动那样因手抖而乱跑：
 - **← / →**：整条引物左 / 右移动 1 bp（按住 **Shift** = 10 bp），固定长度平移，松手即重算 Tm/GC/二聚体。
 - **↑ / ↓**：上 / 下移动一行（视觉布局），自动设置手动行号（优先级高于自动布局），便于把引物错开分行。
-- 前提：处于「引物编辑模式」（启动即默认开启）。未选中引物时方向键仍是 IGV 原生的视图平移。
+- 前提：处于「引物编辑模式」。**v0.1.20 起默认不自动进入**（防误触），需右键 Primers 轨「进入引物编辑模式」或点工具条按钮激活；未选中引物时方向键仍是 IGV 原生的视图平移。
 - 在对话框输入框内打字时快捷键自动失效，不会影响输入。
 
 ### 默认参数与配对
@@ -105,11 +186,17 @@ IGV 启动即出现 **"Primers 引物"** 轨（空轨，在数据面板里）。
 
 ## 重新编译/部署
 ```bash
-cd igv_primer_plugin && bash build.sh          # 编译到 classes/（可用 JAVA8_HOME / IGV_JAR 环境变量指定 JDK8 与 igv.jar）
-python deploy.py <v5_base_jar> <target_igv.jar> <classes_dir>
-#   deploy.py：基于已知洁净的 v5 底座 jar 重建（注入 classes + 去签名 + 保留 builtin_plugin_list 注册）
-#   注：Python 重打包后的 jar 不能用 jar uf 增量更新，必须用 deploy.py 整体重建
+# 1) 准备干净编译基线（剔除旧插件类，避免 classpath 污染）——仅在切换 IGV 版本时需要重做
+#    _igv_base.jar = 从目标 igv.jar 剔除 org/broad/igv/primer/* 类 + builtin_plugin_list.txt 注册行
+# 2) 编译（JAVA8_HOME / IGV_JAR 环境变量可指定 JDK8 与干净基线 jar）
+bash build.sh                 # 编译到 classes/
+# 3) 注入到真实 igv.jar（自动备份 + 去签名 + 写注册）
+python install.py <目标 igv.jar 路径>     # 给本机/对方的 igv.jar 打补丁
+python install.py --package              # 仅打包 PrimerPlugin.jar（分发给他人）
 ```
+- ⚠️ **编译 classpath 必须用干净基线 `_igv_base.jar`，绝不能用已注入插件的 igv.jar**：否则 javac 会解析到陈旧插件类，导致新加的方法/字段"找不到符号"或静默产出缺引用的 class。
+- `install.py` 打补丁后的 jar 与仓库 `_test_igv.jar` **等价验证**：注册一致 / 同类字节一致 / 签名已去。
+- （旧路径 `deploy.py` 仍保留，基于已知洁净底座 jar 整体重建；现主流程为 `build.sh` + `install.py`。）
 
 ### 通用安装器（B 模式：分发给他人 / 重装本机）
 ```bash
@@ -117,7 +204,7 @@ python install.py --package            # 打包本项目 -> PrimerPlugin.jar（�
 python install.py <对方 igv.jar 路径>  # 给对方的 igv.jar 打补丁：自动备份 + 注入 + 去签名 + 写注册
 # 不传路径则自动探测常见位置（C:\Program Files\IGV\lib、/opt/igv/lib 等）或当前目录 igv.jar
 ```
-- 安装后对方重启 IGV 即自动加载 Primer 轨，**零额外操作**。
+- 安装后对方重启 IGV 即自动加载 `Primers` 轨，**零额外操作**。
 - 卸载：用安装时生成的 `igv.jar.bak-<时间戳>` 覆盖回 igv.jar 即可。
 - 已 headless 验证：install.py 打补丁后的 jar 与现有改装 jar **完全等价**（注册一致 / 36 个插件类字节一致 / 签名已去 / 含 BoundedPopupMenu）。
 
@@ -138,7 +225,7 @@ python install.py <对方 igv.jar 路径>  # 给对方的 igv.jar 打补丁：�
 - **headless 实测**：同一文本下 原生菜单宽度 **9239px** → 封顶后 **320px**。
 
 ## v10 更新（session 丢失兜底：自动保存 + 恢复）
-- **现象**：保存 session XML 后再加载，`Primers 引物` 轨不回来。
+- **现象**：保存 session XML 后再加载，`Primers` 轨不回来。
 - **根因（机制使然，非 bug）**：IGV session 只序列化**带 ResourceLocator 的数据轨**（BED/VCF/BAM 等有文件来源的）。PrimerTrack 是插件运行时注入的**内存轨**，`getResourceLocator()` 为 null → 不会被写进 session XML。
 - **处理**：加自动保存兜底（而非强改 session 机制）
   - 引物任何改动（增/删/清空/导入）**立即**写盘，`refresh()`（拖动、改色）**节流 1.5s** 写盘 → `~/.igv_primer_autosave.bed`
