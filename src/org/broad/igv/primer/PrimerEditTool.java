@@ -87,6 +87,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
         PrimerStore.refresh();
         removeKeyboard();
+        instance = null;   // v0.1.20：退出后必须置 null，否则 inEditMode() 永久为真，菜单/按钮卡在"退出编辑"
     }
 
     /** 安装全窗 glass pane（拖拽 ruler 叠加层）；非交互、事件穿透 */
@@ -107,23 +108,6 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     public static boolean inEditMode() {
         return instance != null;
-    }
-
-    private static boolean autoTried = false;
-
-    /** 首次渲染时静默自动进入编辑模式（面板已存在，时机安全） */
-    public static boolean autoTried() {
-        return autoTried;
-    }
-
-    public static void autoEnter() {
-        autoTried = true;
-        SwingUtilities.invokeLater(new Runnable() {
-            public void run() {
-                if (findDataPanels().isEmpty()) return; // 静默失败不弹窗
-                enterEditMode();
-            }
-        });
     }
 
     /** 遍历所有 TrackPanel -> DataPanelContainer 的子组件树，收集 DataPanel */

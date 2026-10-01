@@ -39,8 +39,7 @@ public class PrimerTrack extends AbstractTrack {
         Graphics2D g = ctx.getGraphics();
         String chr = ctx.getChr();
         if (chr == null) return;
-        // 首次渲染自动进入编辑模式（免手动切换，空白拖动仍可平移视图）
-        if (!PrimerEditTool.autoTried()) PrimerEditTool.autoEnter();
+        // 默认不进入编辑模式（防止误触修改引物）；用户点工具栏/右键「进入引物编辑模式」才激活
         PrimerStore.lastChr = chr;
         // 当前染色体可见引物，按起点排序后做行布局（重叠/不同分组 → 上下分行）
         List<Primer> vis = new java.util.ArrayList<Primer>();
