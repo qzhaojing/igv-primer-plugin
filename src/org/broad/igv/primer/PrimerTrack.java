@@ -982,8 +982,6 @@ public class PrimerTrack extends AbstractTrack {
                         return;
                     }
                     PrimerStore.unpairForSelected(hit);
-                    JOptionPane.showMessageDialog(null,
-                            "已取消「" + hit.name + "」相关的配对连线；其余成员之间的连线（如有）保留。");
                 }
             }));
             // v8：颜色一行 12 常用色，点击即换该引物颜色
@@ -1093,7 +1091,6 @@ public class PrimerTrack extends AbstractTrack {
                         "解除全部配对", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
                 if (r == JOptionPane.YES_OPTION) {
                     PrimerStore.clearAllPairs();
-                    JOptionPane.showMessageDialog(null, "已解除全部配对。");
                 }
             }
         }));

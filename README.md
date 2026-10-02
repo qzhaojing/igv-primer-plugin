@@ -1,14 +1,20 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.37]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.38]
 
 ## 状态
-- 版本 **v0.1.37**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.38**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
 - 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
 - 启动 IGV 后「Primers」轨自动出现（空轨，在数据面板里）。
 - ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
 
-## 更新日志（v0.1.8 – v0.1.37，按版本倒序）
+## 更新日志（v0.1.8 – v0.1.38，按版本倒序）
+
+### v0.1.38 配对逻辑收紧：新建引物绝不自动配对 + 配对需能形成 PCR 产物
+- **新建引物：任何配对信息一律清空**（`ampliconId=null`、`pairWith=null`）。修复"新建引物却和很远的无关引物自动连成一对"的 bug——根因是 `nextAmplicon()` 生成的 `"G1"` 与自动保存恢复后已占用的 `G1` 撞 id，被画成同一扩增子。
+- `nextAmplicon()` 改为全局唯一（扫描现有引物避免复用已占用 id），显式配对（Ctrl+点击）也绝不再撞 id。
+- **建立 pair 必须能形成 PCR 产物**：仅允许 F(+)/R(-) 异链，且要求 `R.end - F.start > 0`，否则拒绝配对并弹警告（不建立）。`pairPrimer` / `mergePair` / `linkByNames` / `linkByName` 四处统一加此校验。
+- **取消"已完成"提示框**：右键「取消该引物配对」「解除全部配对」不再弹结果提示，操作完静默返回，不打断连续操作（仅保留错误/确认类弹窗：同链拒绝、产物非法警告、解除全配对的确认）。
 
 ### v0.1.37 修复：打开 session 后引物轨消失且不再自动恢复（v0.1.36 回归）
 - **根因**：v0.1.36 在 `PrimerPlugin.init()` 里 `groupTracks.put(null, manual)`，而 `groupTracks` 是 `ConcurrentHashMap`（不允许 null 键）→ 启动即抛 NPE 被 catch 吞掉 → **守护定时器从未启动** → open session 清掉引物轨后无人自动加回，表现为「primer 空轨不见了、右键也没地方点」。

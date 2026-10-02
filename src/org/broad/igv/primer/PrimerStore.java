@@ -343,7 +343,13 @@ public class PrimerStore {
 
     private static int groupSeq = 0;
     public static synchronized String nextAmplicon() {
-        return "G" + (++groupSeq);
+        String id;
+        do { id = "G" + (++groupSeq); } while (idInUse(id));
+        return id;
+    }
+    private static boolean idInUse(String id) {
+        for (Primer p : primers) if (id.equals(p.ampliconId)) return true;
+        return false;
     }
 
     /** 按名称配对：p.pairWith 或 某引物的 pairWith 指向 p.name → 共享 ampliconId（即连线 + 算异源二聚体） */
@@ -353,6 +359,9 @@ public class PrimerStore {
             boolean match = (p.pairWith != null && p.pairWith.equals(q.name))
                     || (q.pairWith != null && q.pairWith.equals(p.name));
             if (match) {
+                Primer f = p.strand == '+' ? p : q;
+                Primer r = p.strand == '+' ? q : p;
+                if (!canFormProduct(f, r)) continue;   // 不能形成 PCR 产物则不自动连
                 String aid = (p.ampliconId != null) ? p.ampliconId
                         : (q.ampliconId != null ? q.ampliconId : nextAmplicon());
                 p.ampliconId = aid;
@@ -380,7 +389,11 @@ public class PrimerStore {
             nm = nm.trim();
             if (nm.isEmpty()) continue;
             for (Primer q : primers) {
-                if (q != p && nm.equals(q.name) && q.strand != p.strand) q.ampliconId = gid;
+                if (q != p && nm.equals(q.name) && q.strand != p.strand) {
+                    Primer f = p.strand == '+' ? p : q;
+                    Primer r = p.strand == '+' ? q : p;
+                    if (canFormProduct(f, r)) q.ampliconId = gid;  // 仅当能形成 PCR 产物才连
+                }
             }
         }
     }
@@ -402,6 +415,11 @@ public class PrimerStore {
 
     // ---------- Ctrl+点击 快捷配对（v0.1.2） ----------
 
+    /** 判断 f(+)/r(-) 能否形成 PCR 产物：要求 R.end - F.start > 0。 */
+    private static boolean canFormProduct(Primer f, Primer r) {
+        return (r.end - f.start) > 0;
+    }
+
     /**
      * 把 a 与 b 直接连成一对（Ctrl+点击）：
      *  - 双方各自的既有配对先解除（保证一对一，避免出现串线的大组）；
@@ -416,6 +434,17 @@ public class PrimerStore {
                     org.broad.igv.ui.IGV.getMainFrame(),
                     "配对失败：" + a.name + " 与 " + b.name + " 同为 " + tag + " 链。\n"
                             + "只允许 F(+) 与 R(-) 异链配对，请一条选正向引物、一条选反向引物。",
+                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
+        Primer f = a.strand == '+' ? a : b;
+        Primer r = a.strand == '+' ? b : a;
+        if (!canFormProduct(f, r)) {
+            javax.swing.JOptionPane.showMessageDialog(
+                    org.broad.igv.ui.IGV.getMainFrame(),
+                    "配对失败：" + f.name + "(F) 与 " + r.name + "(R) 之间无法形成 PCR 产物\n"
+                            + "（要求 R.end - F.start > 0，当前 = " + (r.end - f.start) + "）。\n"
+                            + "请确认正向引物位于反向引物上游。",
                     "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
             return;
         }
@@ -470,6 +499,17 @@ public class PrimerStore {
     public static synchronized void mergePair(Primer a, Primer b) {
         if (a == null || b == null || a == b) return;
         if (a.strand == b.strand) { warnSameStrand(a, b); return; }
+        Primer f = a.strand == '+' ? a : b;
+        Primer r = a.strand == '+' ? b : a;
+        if (!canFormProduct(f, r)) {
+            javax.swing.JOptionPane.showMessageDialog(
+                    org.broad.igv.ui.IGV.getMainFrame(),
+                    "配对失败：" + f.name + "(F) 与 " + r.name + "(R) 之间无法形成 PCR 产物\n"
+                            + "（要求 R.end - F.start > 0，当前 = " + (r.end - f.start) + "）。\n"
+                            + "请确认正向引物位于反向引物上游。",
+                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
+            return;
+        }
         String gid;
         if (a.ampliconId != null && b.ampliconId != null && !a.ampliconId.equals(b.ampliconId)) {
             String target = a.ampliconId;            // 合并 b 的组进 a 的组

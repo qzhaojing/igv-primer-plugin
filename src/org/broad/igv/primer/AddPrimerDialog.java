@@ -63,7 +63,7 @@ public class AddPrimerDialog {
         incLen.setSelected(PrimerStore.defaultIncludeLen);
         incLen.setToolTipText("勾选：填写值=引物+延伸总长；不勾：填写值=延伸部分长度");
         final JTextField pairF = new JTextField(existing != null ? PrimerStore.groupPartnerNames(existing) : "", 16);
-        final JLabel ampF = new JLabel(existing == null ? PrimerStore.nextAmplicon() : existing.ampliconId);
+        final JLabel ampF = new JLabel(existing == null ? "（新建时留空，配对时生成）" : existing.ampliconId);
         int r2 = 0;
         addRow(seqSet, gcs, r2++, "F 测序长度 nt (R1)", readF);
         addRow(seqSet, gcs, r2++, "R 测序长度 nt (R2)", readR);
@@ -334,8 +334,9 @@ public class AddPrimerDialog {
                     int readLen = incLen.isSelected() ? Math.max(0, raw - (en - s)) : raw;
 
                     if (existing == null) {
-                        Primer p = new Primer(name, chr, s, en, strand, role, readLen, ampliconId);
-                        p.pairWith = pairText.isEmpty() ? null : pairText;
+                        // v0.1.38：新建引物绝不带任何配对信息（ampliconId/pairWith 一律清空），避免与已有扩增子撞 id 而被误连。
+                        Primer p = new Primer(name, chr, s, en, strand, role, readLen, null);
+                        p.pairWith = null;
                         p.group = group;   // 写入打开对话框的那条引物轨所属分组
                         PrimerStore.add(p);
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
