@@ -1,14 +1,18 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.36]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.37]
 
 ## 状态
-- 版本 **v0.1.36**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.37**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
 - 注册于 jar 内 `org/broad/igv/ui/resources/builtin_plugin_list.txt`（追加 `org.broad.igv.primer.PrimerPlugin`）。
 - 启动 IGV 后「Primers」轨自动出现（空轨，在数据面板里）。
 - ⚠️ **IGV-GSAman.exe 不支持**（其定制构建删除了 dev/api SPI 与 initIGVPlugins）。
 
-## 更新日志（v0.1.8 – v0.1.36，按版本倒序）
+## 更新日志（v0.1.8 – v0.1.37，按版本倒序）
+
+### v0.1.37 修复：打开 session 后引物轨消失且不再自动恢复（v0.1.36 回归）
+- **根因**：v0.1.36 在 `PrimerPlugin.init()` 里 `groupTracks.put(null, manual)`，而 `groupTracks` 是 `ConcurrentHashMap`（不允许 null 键）→ 启动即抛 NPE 被 catch 吞掉 → **守护定时器从未启动** → open session 清掉引物轨后无人自动加回，表现为「primer 空轨不见了、右键也没地方点」。
+- **修复**：手动轨（group==null）只登记 `knownTracks`；`ensureTrackForGroup` 的查重统一改为遍历 `knownTracks`（同时兼容 null 分组），`groupTracks` 仅存非 null 分组。autosave 恢复（含 null 分组引物）不再 NPE。
 
 ### v0.1.36 引物轨多轨化：导入多个 BED 各自独立成轨 [NEW]
 - 修复「导入第二个 BED 会与第一个合并到同一轨」的问题：改为**每轨绑定一个来源分组**（分组 = 导入 BED 的文件名；手动添加轨分组为 null）。
@@ -22,8 +26,6 @@
 - 移除「读取序列」「评估二聚体」两个按钮（冗余且会触发全局 O(n²) 评估）；对话框打开即自动显示序列、Tm/GC/hairpin/self、二聚体结果。
 - 新增 **self-dimer / 异源二聚体 序列排布形状**：以反平行文本图（上链 5'→3' / 配对竖线 / 下链 3'→5'）直观展示配对位置与 bulge；两者**左右排列**（self 左、hetero 右）节省纵向空间。
 - 异源二聚体形状**仅针对「配对引物名称」里填的伙伴**计算，绝不扫全体引物（避免无谓评估）；未指定配对时给出提示而非硬算。
-
-### v0.1.34 修复 session 打开崩溃根因（中文路径 GBK）+ 引物轨自动恢复守护
 
 ### v0.1.34 修复 session 打开崩溃根因（中文路径 GBK）+ 引物轨自动恢复守护
 - 修复 `open session` 报 `MalformedByteSequenceException` 的根因：IGV 在 Windows 把含中文目录名的数据文件路径以平台 GBK 编码写进 session，却按 UTF-8 读回 → 把损坏的 session 文件整体按 GBK 解码、再以 UTF-8 重编码即可修复（路径含中文目录名时尤其明显）。

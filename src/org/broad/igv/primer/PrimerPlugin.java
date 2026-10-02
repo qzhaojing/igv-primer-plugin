@@ -40,7 +40,9 @@ public class PrimerPlugin implements IGVPlugin {
             PrimerTrack manual = new PrimerTrack();   // 默认手动添加轨
             IGV.getInstance().addTracks(Collections.singletonList(manual), PanelName.DATA_PANEL);
             knownTracks.add(manual);
-            groupTracks.put(null, manual);
+            // 注意：groupTracks 是 ConcurrentHashMap，不允许 null 键；
+            // v0.1.36 曾在此 put(null,...) 抛 NPE，导致守护定时器未启动 → 打开 session 后引物轨无法自动恢复。
+            // 手动轨只登记在 knownTracks，查重统一走 knownTracks 遍历。
             // v0.1.34：IGV 打开 session 时会重建数据面板并清掉引物轨（它不进 session 文件），
             // 这里起一个轻量守护定时器，定时确认已知引物轨存在，不在就自动加回，
             // 从而保证「打开 session 不影响引物轨」。间隔 1.5s，开销可忽略。
@@ -57,7 +59,12 @@ public class PrimerPlugin implements IGVPlugin {
      *  - 否则新建独立轨并加入 IGV 面板。
      */
     public static synchronized void ensureTrackForGroup(String group) {
-        if (groupTracks.containsKey(group)) return;
+        // 查重：已有同分组轨直接返回（group==null 即手动轨；不用 groupTracks.containsKey，
+        // 因为 ConcurrentHashMap 不允许 null 键，containsKey(null) 也会 NPE）
+        for (PrimerTrack t : knownTracks) {
+            String g = t.getGroup();
+            if (group == null ? g == null : group.equals(g)) return;
+        }
         // 认领唯一存在的空手动轨（首次导入 → 占满默认轨，实现"导入两个 = 两条轨"而非三条）
         if (group != null) {
             for (PrimerTrack t : knownTracks) {
@@ -72,7 +79,7 @@ public class PrimerPlugin implements IGVPlugin {
         PrimerTrack t = new PrimerTrack(group);
         try { IGV.getInstance().addTracks(Collections.singletonList(t), PanelName.DATA_PANEL); } catch (Throwable ignore) { }
         knownTracks.add(t);
-        groupTracks.put(group, t);
+        if (group != null) groupTracks.put(group, t);
     }
 
     /** 关闭一条引物轨：从 IGV 面板移除，并从注册表注销（守护不再重加）。 */
