@@ -72,7 +72,7 @@ public class AddPrimerDialog {
         addRow(seqSet, gcs, r2++, "扩增子 ID", ampF);
 
         // ===== 序列与评估 =====
-        JPanel eval = section("序列与评估（二聚体按需评估，平时不计算）");
+        JPanel eval = section("序列与评估（打开即自动显示，无需点击）");
         GridBagConstraints gce = new GridBagConstraints();
         gce.insets = new Insets(2, 4, 2, 4);
         gce.anchor = GridBagConstraints.WEST;
@@ -81,7 +81,6 @@ public class AddPrimerDialog {
         seqArea.setLineWrap(true);
         seqArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JScrollPane seqScroll = new JScrollPane(seqArea);
-        JButton readSeqBtn = new JButton("读取序列");
         final JLabel tmL = new JLabel("-");
         final JLabel gcL = new JLabel("-");
         final JLabel hairL = new JLabel("-");
@@ -90,10 +89,30 @@ public class AddPrimerDialog {
         final JLabel compL = new JLabel("-");
         final JLabel statusL = new JLabel("—");
         statusL.setForeground(Color.BLUE);
-        JButton evalBtn = new JButton("评估二聚体");
+
+        // 二聚体排布形状（左 self / 右 hetero），打开即自动显示，信息左右排列省纵向空间
+        final JTextArea selfArea = new JTextArea(3, 36);
+        selfArea.setEditable(false);
+        selfArea.setLineWrap(false);
+        selfArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        final JTextArea heteroArea = new JTextArea(3, 36);
+        heteroArea.setEditable(false);
+        heteroArea.setLineWrap(false);
+        heteroArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        JPanel selfBox = new JPanel(new BorderLayout());
+        selfBox.setBorder(new TitledBorder("self-dimer"));
+        selfBox.add(selfArea, BorderLayout.CENTER);
+        JPanel heteroBox = new JPanel(new BorderLayout());
+        heteroBox.setBorder(new TitledBorder("异源二聚体（仅配对伙伴）"));
+        heteroBox.add(heteroArea, BorderLayout.CENTER);
+        JPanel dimerPanel = new JPanel();
+        dimerPanel.setLayout(new BoxLayout(dimerPanel, BoxLayout.X_AXIS));
+        dimerPanel.add(selfBox);
+        dimerPanel.add(Box.createHorizontalStrut(12));
+        dimerPanel.add(heteroBox);
+
         int r3 = 0;
         addRow(eval, gce, r3++, "序列", seqScroll);
-        addRow(eval, gce, r3++, "", readSeqBtn);
         addRow(eval, gce, r3++, "Tm", tmL);
         addRow(eval, gce, r3++, "GC%", gcL);
         addRow(eval, gce, r3++, "hairpin ΔG", hairL);
@@ -101,7 +120,9 @@ public class AddPrimerDialog {
         addRow(eval, gce, r3++, "异源二聚体 ΔG", heteroL);
         addRow(eval, gce, r3++, "3' 互补碱基数", compL);
         addRow(eval, gce, r3++, "评估状态", statusL);
-        addRow(eval, gce, r3++, "", evalBtn);
+        gce.gridwidth = 2;
+        addRow(eval, gce, r3++, "二聚体排布", dimerPanel);
+        gce.gridwidth = 1;
 
         // 容器
         JPanel form = new JPanel();
@@ -182,7 +203,7 @@ public class AddPrimerDialog {
             }
         };
 
-        // 从当前输入框构建临时引物并刷新序列 + 单引物指标（Tm/GC/hairpin/self），不跑二聚体
+        // 从当前输入框构建临时引物并刷新序列 + 指标 + 二聚体形状（打开即自动显示，不跑全体评估）
         final Runnable updatePreview = new Runnable() {
             public void run() {
                 try {
@@ -198,41 +219,58 @@ public class AddPrimerDialog {
                     PrimerMetrics.evaluate(p);
                     cur[0] = p;
                     display.run();
+
+                    // self-dimer 形状（始终自动显示）
+                    PrimerMetrics.DimerShape selfSh = PrimerMetrics.dimerShape(p.seq, p.seq);
+                    selfArea.setText(selfSh.valid
+                            ? selfSh.topLine + "\n" + selfSh.bondLine + "\n" + selfSh.botLine
+                            : "（序列过短或未加载参考基因组）");
+
+                    // 异源二聚体形状：仅针对「配对引物名称」里填的伙伴，绝不扫全体引物
+                    String partnerText = pairF.getText().trim();
+                    Primer partner = null;
+                    double worst = 0;
+                    if (!partnerText.isEmpty()) {
+                        for (String nm : partnerText.split("[,;\\s]+")) {
+                            for (Primer q : PrimerStore.getPrimers()) {
+                                if (q.name == null || !q.name.equals(nm)) continue;
+                                if (q.seq == null || q.seq.length() < 4) break;
+                                PrimerMetrics.DimerShape sh = PrimerMetrics.dimerShape(p.seq, q.seq);
+                                if (sh.valid && sh.dg < worst - 1e-9) { worst = sh.dg; partner = q; }
+                                break;
+                            }
+                        }
+                    }
+                    StringBuilder sb = new StringBuilder();
+                    if (partner != null) {
+                        PrimerMetrics.DimerShape hSh = PrimerMetrics.dimerShape(p.seq, partner.seq);
+                        heteroArea.setText(hSh.topLine + "\n" + hSh.bondLine + "\n" + hSh.botLine);
+                        heteroL.setText(partner.name + " " + String.format("%.1f", hSh.dg));
+                        int c3 = PrimerMetrics.max3pComplement(p.seq, partner.seq);
+                        if (hSh.dg <= PrimerStore.failHeteroDgTh || c3 >= PrimerStore.failHetero3pTh)
+                            sb.append("异源二聚体强(与").append(partner.name).append(") ");
+                    } else {
+                        heteroArea.setText("（未指定配对引物；异源二聚体为其与配对伙伴间的相互作用。\n 在轨道 Ctrl+点击 配对，或本框填入「配对引物名称」后显示）");
+                        heteroL.setText("—");
+                    }
+
+                    // 评估状态（合并单引物判据 + 异源二聚体）
+                    if (!p.failReasons.isEmpty()) {
+                        statusL.setText("不通过： " + p.failReasons + (sb.length() > 0 ? " " + sb : ""));
+                        statusL.setForeground(Color.RED);
+                    } else if (sb.length() > 0) {
+                        statusL.setText("不通过： " + sb.toString().trim());
+                        statusL.setForeground(Color.RED);
+                    } else {
+                        statusL.setText("通过（self ΔG=" + String.format("%.1f", p.selfDG) + "）");
+                        statusL.setForeground(new Color(0, 128, 0));
+                    }
                 } catch (Exception ignore) {
                     cur[0] = null;
                     display.run();
-                }
-            }
-        };
-
-        // 「评估二聚体」：existing → 全局评估全部引物；new → 仅评估此拟添加引物对现有集合
-        final Runnable evalDimer = new Runnable() {
-            public void run() {
-                if (existing != null) {
-                    PrimerStore.evaluatePairs();
-                    cur[0] = existing;
-                    display.run();
-                    JOptionPane.showMessageDialog(dlg, "已对全部 " + PrimerStore.getPrimers().size() + " 条引物评估二聚体。");
-                } else {
-                    try {
-                        String chr = chrF.getText().trim();
-                        int s = Integer.parseInt(startF.getText().trim());
-                        int e = Integer.parseInt(endF.getText().trim());
-                        Primer p = new Primer();
-                        p.name = nameF.getText().trim();
-                        p.chr = chr; p.start = s; p.end = e;
-                        p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
-                        p.role = (String) roleC.getSelectedItem();
-                        p.seq = readSeqFromGenome(chr, s, e);
-                        PrimerMetrics.evaluate(p);
-                        PrimerStore.evaluateOneAgainstAll(p);
-                        cur[0] = p;
-                        display.run();
-                        JOptionPane.showMessageDialog(dlg,
-                                "已基于现有 " + PrimerStore.getPrimers().size() + " 条引物评估该拟添加引物的二聚体。");
-                    } catch (Exception ex) {
-                        JOptionPane.showMessageDialog(dlg, "坐标无效，无法评估。");
-                    }
+                    selfArea.setText("");
+                    heteroArea.setText("");
+                    heteroL.setText("-");
                 }
             }
         };
@@ -251,12 +289,6 @@ public class AddPrimerDialog {
         };
         strandC.addActionListener(al);
         roleC.addActionListener(al);
-        readSeqBtn.addActionListener(new ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
-        });
-        evalBtn.addActionListener(new ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent e) { evalDimer.run(); }
-        });
 
         // 打开即预览一次
         updatePreview.run();

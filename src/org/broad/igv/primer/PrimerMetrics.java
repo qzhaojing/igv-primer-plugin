@@ -165,6 +165,85 @@ public class PrimerMetrics {
         return best;
     }
 
+    /** 二聚体比对形状（用于编辑对话框内文本可视化） */
+    public static class DimerShape {
+        public String topLine = "";
+        public String bondLine = "";
+        public String botLine = "";
+        public double dg = 0;
+        public boolean valid = false;
+    }
+
+    /**
+     * 计算两条序列的最佳互补比对形状（self-dimer：b 传自身；hetero-dimer：b 传配对伙伴）。
+     * 复用 dimerDG 的滑动打分逻辑，返回三行文本：上链 5'->3' / 配对竖线 / 下链 3'->5'
+     * （下链为反互补反向显示，呈反向平行；配对处画 '|'，错配/凸出留空格）。
+     */
+    public static DimerShape dimerShape(String a, String b) {
+        DimerShape sh = new DimerShape();
+        if (a == null || b == null || a.length() < 4 || b.length() < 4) return sh;
+        String top = a.toUpperCase();
+        String botRaw = revComp(b.toUpperCase());                 // 5'->3'
+        String botDisp = new StringBuilder(botRaw).reverse().toString(); // 3'->5'（反向平行显示，= comp(b)）
+        int n = top.length(), m = botRaw.length();
+        // 找最佳偏移（与 dimerDG 同口径：最负 ΔG）
+        double bestDG = 0;
+        int bestOff = 0;
+        for (int off = -(m - 1); off < n; off++) {
+            int match = 0, gc = 0;
+            double dg = 0;
+            for (int j = 0; j < m; j++) {
+                int k = off + j;
+                if (k < 0 || k >= n) continue;
+                if (top.charAt(k) == botRaw.charAt(j)) {
+                    match++;
+                    if (top.charAt(k) == 'G' || top.charAt(k) == 'C') gc++;
+                } else {
+                    if (match >= 3) {
+                        double v = -1.0 * match - 1.0 * gc + 3.5;
+                        if (v < dg) dg = v;
+                    }
+                    match = 0;
+                    gc = 0;
+                }
+            }
+            if (match >= 3) {
+                double v = -1.0 * match - 1.0 * gc + 3.5;
+                if (v < dg) dg = v;
+            }
+            if (dg < bestDG - 1e-9) {
+                bestDG = dg;
+                bestOff = off;
+            }
+        }
+        int lo = Math.min(0, bestOff);
+        int hi = Math.max(n, bestOff + m);
+        int W = hi - lo;
+        char[] tA = new char[W], bA = new char[W], bd = new char[W];
+        java.util.Arrays.fill(tA, ' ');
+        java.util.Arrays.fill(bA, ' ');
+        java.util.Arrays.fill(bd, ' ');
+        for (int c = 0; c < W; c++) {
+            int topIdx = c + lo;
+            if (topIdx >= 0 && topIdx < n) tA[c] = top.charAt(topIdx);
+            int botRawIdx = (c + lo) - bestOff; // = k - bestOff = j
+            if (botRawIdx >= 0 && botRawIdx < m) {
+                int dispIdx = m - 1 - botRawIdx;
+                bA[c] = botDisp.charAt(dispIdx);
+                if (topIdx >= 0 && topIdx < n && tA[c] != ' ') {
+                    if (tA[c] == bA[c]) bd[c] = '|'; // top==revComp(b) 即互补配对
+                }
+            }
+        }
+        String t = new String(tA), bot = new String(bA), bond = new String(bd);
+        sh.topLine = "5'-" + t + "-3'";
+        sh.bondLine = "   " + bond + "   ";
+        sh.botLine = "3'-" + bot + "-5'";
+        sh.dg = bestDG;
+        sh.valid = true;
+        return sh;
+    }
+
     /** 两引物 3' 端互配的最大连续互补碱基数（任一 3' 端参与才计入） */
     public static int max3pComplement(String a, String b) {
         if (a == null || b == null) return 0;
