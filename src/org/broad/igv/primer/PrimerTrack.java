@@ -3,7 +3,9 @@ package org.broad.igv.primer;
 import org.broad.igv.track.AbstractTrack;
 import org.broad.igv.track.RenderContext;
 import org.broad.igv.track.TrackClickEvent;
+import org.broad.igv.ui.IGV;
 import org.broad.igv.ui.panel.IGVPopupMenu;
+import org.broad.igv.ui.panel.TrackPanel;
 
 import javax.swing.*;
 import java.awt.*;
@@ -19,18 +21,51 @@ import java.util.List;
  *  - 同一扩增子 R1-R2 之间画扩增子连线
  *  - fail 红色外框
  *  - 拖拽时由 PrimerEditTool 设置 guide 状态，overlay() 画竖线参考线
+ *
+ * v0.1.36 多轨：每条 PrimerTrack 绑定一个来源分组（group = 导入的 BED 文件名，null=手动添加轨），
+ * 仅渲染该分组的引物；各轨独立增删改/导出/关闭。screenRects/screenRows/工具条状态均为实例级，避免多轨互相覆盖。
  */
 public class PrimerTrack extends AbstractTrack {
 
-    public PrimerTrack() {
+    /** 所有存活的引物轨（供多轨刷新/命中聚合/守护使用） */
+    public static final java.util.List<PrimerTrack> ALL = new java.util.ArrayList<PrimerTrack>();
+
+    /** 本轨绑定的来源分组（BED 文件名）；null 表示手动添加轨 */
+    private String group;
+
+    /** 本轨渲染时记录每条引物的屏幕矩形/行号（实例级，多轨互不覆盖） */
+    public final java.util.Map<Primer, Rectangle> screenRects = new java.util.HashMap<Primer, Rectangle>();
+    public final java.util.Map<Primer, Integer> screenRows = new java.util.HashMap<Primer, Integer>();
+
+    public PrimerTrack() { this(null); }
+
+    public PrimerTrack(String group) {
         super("primer_designer");
         // v0.1.33：轨名必须用纯 ASCII——AbstractTrack.name 被 JAXB 序列化进 session XML，
         // 中文名在 Windows 上会被写成非 UTF-8 字节，open session 时解析报 MalformedByteSequenceException 并丢失本轨。
+        // 来源文件名（可能含中文）只画在轨内 caption，不写进轨名。
+        this.group = group;
         setName("Primers");
         setColor(new Color(0, 128, 0));
         setHeight(60);
-        PrimerStore.setTrack(this);
+        ALL.add(this);
     }
+
+    /** 把本轨重新绑定到一个来源分组（首次导入认领空轨时使用） */
+    void bindGroup(String g) { this.group = g; }
+
+    /** 本轨是否承载该引物（按分组过滤） */
+    private boolean inGroup(Primer p) {
+        return group == null ? (p.group == null) : group.equals(p.group);
+    }
+
+    /** 本轨来源分组（caption 显示用） */
+    public String groupLabel() {
+        return group == null ? "手动添加" : group;
+    }
+
+    /** 本轨绑定的分组（null=手动添加轨）；供 PrimerPlugin 注册表查询 */
+    public String getGroup() { return group; }
 
     public void update() {
         // 通知面板高度等变化（简单起见高度固定）
@@ -43,14 +78,14 @@ public class PrimerTrack extends AbstractTrack {
         if (chr == null) return;
         // 默认不进入编辑模式（防止误触修改引物）；用户点工具栏/右键「进入引物编辑模式」才激活
         PrimerStore.lastChr = chr;
-        // 当前染色体可见引物，按起点排序后做行布局（重叠/不同分组 → 上下分行）
+        // 当前染色体可见引物（仅本轨分组），按起点排序后做行布局（重叠/不同分组 → 上下分行）
         List<Primer> vis = new java.util.ArrayList<Primer>();
-        for (Primer p : PrimerStore.getPrimers()) if (chr.equals(p.chr)) vis.add(p);
+        for (Primer p : PrimerStore.getPrimers()) if (chr.equals(p.chr) && inGroup(p)) vis.add(p);
         java.util.Collections.sort(vis, new java.util.Comparator<Primer>() {
             public int compare(Primer a, Primer b) { return a.start - b.start; }
         });
-        PrimerStore.screenRects.clear();   // 重新记录当前染色体可见引物的屏幕矩形
-        PrimerStore.screenRows.clear();
+        this.screenRects.clear();   // 重新记录当前染色体可见引物的屏幕矩形（实例级，互不覆盖）
+        this.screenRows.clear();
         java.util.Map<Primer, Integer> rows = layoutRows(vis);
         int nRows = 0;
         for (Integer r : rows.values()) nRows = Math.max(nRows, r + 1);
@@ -182,10 +217,16 @@ public class PrimerTrack extends AbstractTrack {
             g.drawString(b.label, b.rect.x + (b.rect.width - tw) / 2, b.rect.y + b.rect.height - 4);
         }
         drawToolbarBoxes(g);   // 绘制两个圆角参数框（含文本输入框与设置按钮）
+        // v0.1.36：工具条右侧画本轨来源 caption（分组名/手动添加），用于区分多条独立引物轨
+        g.setFont(g.getFont().deriveFont(10f));
+        String cap = groupLabel();
+        int capW = g.getFontMetrics(g.getFont()).stringWidth(cap);
+        g.setColor(new Color(90, 90, 90));
+        g.drawString(cap, bar.x + bar.width - capW - 8, bar.y + bar.height - 9);
     }
 
     /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
-    private static java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
+    private java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
         java.util.List<ToolbarBtn> out = new java.util.ArrayList<ToolbarBtn>();
         int x = bar.x + 4;
         int y = bar.y + 4;
@@ -197,6 +238,7 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
         defs.put("exp", "导出BED");
         defs.put("imp", "导入BED");
+        defs.put("close", "关闭");
         for (java.util.Map.Entry<String, String> e : defs.entrySet()) {
             String id = e.getKey();
             String label = e.getValue();
@@ -228,9 +270,9 @@ public class PrimerTrack extends AbstractTrack {
     private static final int FLD_W = 34;     // 文本框宽度（容纳 3-4 位数字）
     private static final int FLD_H = 18;     // 文本框高度
     private static final int SET_W = 38;     // “设置”按钮宽度
-    private static Rectangle toolbarRect = null;          // 工具条背景矩形（屏幕坐标，随渲染更新）
-    private static String toolbarChr = null;             // 该矩形对应的染色体
-    private static final java.util.Map<String, Rectangle> toolbarBtns =
+    private Rectangle toolbarRect = null;          // 工具条背景矩形（屏幕坐标，随渲染更新，实例级）
+    private String toolbarChr = null;             // 该矩形对应的染色体
+    private final java.util.Map<String, Rectangle> toolbarBtns =
             new java.util.HashMap<String, Rectangle>();   // 按钮 id -> 屏幕矩形
 
     /** 工具条按钮（内部记录 id/文案/是否激活/矩形） */
@@ -262,12 +304,12 @@ public class PrimerTrack extends AbstractTrack {
             this.rect = rect; this.fields = fields; this.setBtn = setBtn; this.setAction = setAction;
         }
     }
-    private static final java.util.List<TBBox> toolbarBoxes = new java.util.ArrayList<TBBox>();
-    private static final java.util.Map<String, Rectangle> toolbarFields = new java.util.HashMap<String, Rectangle>();
+    private final java.util.List<TBBox> toolbarBoxes = new java.util.ArrayList<TBBox>();
+    private final java.util.Map<String, Rectangle> toolbarFields = new java.util.HashMap<String, Rectangle>();
     private static final java.util.Map<String, String> fieldValues = new java.util.LinkedHashMap<String, String>();
     private static boolean fieldValuesInit = false;
     private static String focusedFieldId = null;
-    private static int toolbarBtnsEndX = 0;
+    private int toolbarBtnsEndX = 0;
     private static boolean kbdInstalled = false;
 
     /** 全局键盘分发器：仅当某个文本框聚焦时拦截按键用于编辑；其余情况放行（return false）。 */
@@ -317,7 +359,7 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /** 计算两个圆角参数框的布局（矩形），写入 toolbarBoxes 与 toolbarFields；依赖 toolbarBtnsEndX。 */
-    private static void layoutBoxes(Rectangle bar) {
+    private void layoutBoxes(Rectangle bar) {
         if (!fieldValuesInit) { initFieldValues(); fieldValuesInit = true; }
         int baseY = bar.y + (bar.height - FLD_H) / 2;
         // ---- 框1：测序长度（R1 / R2 + 设置） ----
@@ -357,7 +399,7 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /** 绘制两个圆角参数框（背景框 + 文本框 + 设置按钮） */
-    private static void drawToolbarBoxes(Graphics2D g) {
+    private void drawToolbarBoxes(Graphics2D g) {
         for (TBBox box : toolbarBoxes) {
             g.setColor(new Color(232, 236, 244));
             g.fillRoundRect(box.rect.x, box.rect.y, box.rect.width, box.rect.height, 8, 8);
@@ -491,10 +533,10 @@ public class PrimerTrack extends AbstractTrack {
      * v0.1.17：不绘制、仅按当前染色体计算引物轨所需高度（行布局与 render 一致），
      * 供 PrimerStore.refresh() 判断"是否需要全量刷新"——仅当行数（高度）变化时才有必要调用昂贵的 doRefresh()。
      */
-    public static int computeNeededHeight(String chr) {
+    public int computeNeededHeight(String chr) {
         if (chr == null) return 60;
         java.util.List<Primer> vis = new java.util.ArrayList<Primer>();
-        for (Primer p : PrimerStore.getPrimers()) if (chr.equals(p.chr)) vis.add(p);
+        for (Primer p : PrimerStore.getPrimers()) if (chr.equals(p.chr) && inGroup(p)) vis.add(p);
         java.util.Collections.sort(vis, new java.util.Comparator<Primer>() {
             public int compare(Primer a, Primer b) { return a.start - b.start; }
         });
@@ -502,6 +544,85 @@ public class PrimerTrack extends AbstractTrack {
         int nRows = 0;
         for (Integer r : rows.values()) nRows = Math.max(nRows, r + 1);
         return Math.max(60, TOOLBAR_H + nRows * ROW_H + 14);
+    }
+
+    // ---------- v0.1.36 多轨刷新 / 命中聚合（供 PrimerStore.refresh 与编辑工具跨轨使用） ----------
+
+    /** 逐轨重算高度：任一轨高度变化 → 全量 doRefresh；否则仅各自重绘所在面板（多轨互不拖累）。 */
+    static void refreshAllTracks(String chr) {
+        if (ALL.isEmpty()) {
+            runOnEDT(new Runnable() {
+                public void run() { IGV.getInstance().doRefresh(); }
+            });
+            return;
+        }
+        boolean heightChanged = false;
+        for (PrimerTrack t : ALL) {
+            int oldH = t.getHeight();
+            int newH = t.computeNeededHeight(chr);
+            t.update();
+            if (newH != oldH) heightChanged = true;
+        }
+        if (heightChanged) {
+            runOnEDT(new Runnable() {
+                public void run() { IGV.getInstance().doRefresh(); }
+            });
+        } else {
+            runOnEDT(new Runnable() {
+                public void run() { for (PrimerTrack t : ALL) repaintTrackOnly(t); }
+            });
+        }
+    }
+
+    private static void runOnEDT(Runnable r) {
+        if (SwingUtilities.isEventDispatchThread()) r.run();
+        else SwingUtilities.invokeLater(r);
+    }
+
+    private static void repaintTrackOnly(PrimerTrack t) {
+        try {
+            TrackPanel tp = TrackPanel.getParentPanel(t);
+            if (tp != null) { tp.repaint(); return; }
+        } catch (Throwable ignore) { }
+        IGV.getInstance().repaintDataPanels();
+    }
+
+    /** 聚合所有轨的屏幕矩形（编辑工具命中检测用） */
+    static java.util.Map<Primer, Rectangle> allScreenRects() {
+        java.util.Map<Primer, Rectangle> m = new java.util.HashMap<Primer, Rectangle>();
+        for (PrimerTrack t : ALL) m.putAll(t.screenRects);
+        return m;
+    }
+
+    /** 聚合所有轨的屏幕行号 */
+    static java.util.Map<Primer, Integer> allScreenRows() {
+        java.util.Map<Primer, Integer> m = new java.util.HashMap<Primer, Integer>();
+        for (PrimerTrack t : ALL) m.putAll(t.screenRows);
+        return m;
+    }
+
+    /** 跨所有轨命中测试（屏幕坐标） */
+    static Primer hitTestAny(int x, int y, String chr) {
+        for (PrimerTrack t : ALL) {
+            Primer p = t.hitTest(x, y, chr);
+            if (p != null) return p;
+        }
+        return null;
+    }
+
+    /** 跨所有轨命中测试（基因组坐标，退化用） */
+    static Primer hitTestAny(int bp, String chr) {
+        for (PrimerTrack t : ALL) {
+            Primer p = t.hitTest(bp, chr);
+            if (p != null) return p;
+        }
+        return null;
+    }
+
+    /** 跨所有轨判断坐标是否落在某条轨的工具条内 */
+    static boolean isInToolbarAny(int x, int y, String chr) {
+        for (PrimerTrack t : ALL) if (t.isInToolbar(x, y, chr)) return true;
+        return false;
     }
 
     /**
@@ -710,9 +831,9 @@ public class PrimerTrack extends AbstractTrack {
             g.fillRect(x1 - 3, midY - 3, 6, 6);
         }
 
-        // 记录屏幕矩形（含 y）与行号，供编辑工具命中检测 / 上下拖动换行
-        PrimerStore.screenRects.put(p, new Rectangle(x0, y, w, h));
-        PrimerStore.screenRows.put(p, Math.max(0, row));
+        // 记录屏幕矩形（含 y）与行号，供编辑工具命中检测 / 上下拖动换行（本轨实例级）
+        this.screenRects.put(p, new Rectangle(x0, y, w, h));
+        this.screenRows.put(p, Math.max(0, row));
     }
 
     /** 在 (x,y) 画实心方向三角：dir=+1 尖端指向右，dir=-1 尖端指向左（尖端位于 x）。 */
@@ -819,7 +940,7 @@ public class PrimerTrack extends AbstractTrack {
         // v8：命中引物 → "编辑引物"；空白 → "在此添加引物"
         menu.add(item(hit != null ? "编辑引物..." : "在此添加引物...", new Runnable() {
             public void run() {
-                AddPrimerDialog.show(clickBp, hit);
+                AddPrimerDialog.show(clickBp, hit, PrimerTrack.this.group);
             }
         }));
 
@@ -1002,9 +1123,14 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
-        menu.add(item("导出 BED（方向+颜色+测序长度）", new Runnable() {
+        menu.add(item("导出本轨 BED（方向+颜色+测序长度）", new Runnable() {
             public void run() {
-                ExportUtils.exportBED();
+                ExportUtils.exportBED(PrimerTrack.this.group);   // 仅导出本轨分组
+            }
+        }));
+        menu.add(item("导出全部 BED", new Runnable() {
+            public void run() {
+                ExportUtils.exportBED(null);   // 全部引物
             }
         }));
         menu.add(item("导出引物序列 FASTA（按方向）", new Runnable() {
@@ -1017,9 +1143,21 @@ public class PrimerTrack extends AbstractTrack {
                 ExportUtils.exportReadFasta();
             }
         }));
-        menu.add(item("导入 BED（恢复编辑）", new Runnable() {
+        menu.add(item("导入 BED（新建独立轨）", new Runnable() {
             public void run() {
                 ExportUtils.importBED();
+            }
+        }));
+        menu.add(item("关闭本轨（删除该来源引物）", new Runnable() {
+            public void run() {
+                int n = PrimerStore.countGroup(PrimerTrack.this.group);
+                int r = JOptionPane.showConfirmDialog(null,
+                        "确认关闭本引物轨「" + groupLabel() + "」？\n将删除其下 " + n + " 条引物（建议先「导出本轨 BED」备份）。",
+                        "关闭引物轨", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) {
+                    PrimerStore.removeGroup(PrimerTrack.this.group);
+                    PrimerPlugin.closeTrack(PrimerTrack.this);
+                }
             }
         }));
         menu.addSeparator();
@@ -1028,9 +1166,22 @@ public class PrimerTrack extends AbstractTrack {
                 PrimerStore.refreshAll();
             }
         }));
-        menu.add(item("清空全部引物", new Runnable() {
+        menu.add(item("清空本轨引物", new Runnable() {
             public void run() {
-                PrimerStore.clear();
+                int n = PrimerStore.countGroup(PrimerTrack.this.group);
+                if (n == 0) { JOptionPane.showMessageDialog(null, "本轨没有引物。"); return; }
+                int r = JOptionPane.showConfirmDialog(null,
+                        "确认删除本轨「" + groupLabel() + "」的全部 " + n + " 条引物？",
+                        "清空本轨引物", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) PrimerStore.removeGroup(PrimerTrack.this.group);
+            }
+        }));
+        menu.add(item("清空全部轨道引物", new Runnable() {
+            public void run() {
+                int r = JOptionPane.showConfirmDialog(null,
+                        "确认删除所有引物轨的全部引物？此操作不可撤销。",
+                        "清空全部引物", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) PrimerStore.clear();
             }
         }));
         menu.addSeparator();
@@ -1062,15 +1213,15 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /** 命中测试（基因组坐标，退化用） */
-    public static Primer hitTest(int bp, String chr) {
+    public Primer hitTest(int bp, String chr) {
         for (Primer p : PrimerStore.getPrimers()) {
-            if (chr.equals(p.chr) && bp >= p.start && bp < p.end) return p;
+            if (chr.equals(p.chr) && inGroup(p) && bp >= p.start && bp < p.end) return p;
         }
         return null;
     }
 
     /** v8 行感知命中测试（屏幕坐标，两轮：先精确引物条 ±3px，再含延长区 ±16px；后画优先=上层优先） */
-    public static Primer hitTest(int x, int y, String chr) {
+    public Primer hitTest(int x, int y, String chr) {
         if (chr == null) return null;
         List<Primer> ps = PrimerStore.getPrimers();
         for (int round = 0; round < 2; round++) {
@@ -1078,8 +1229,8 @@ public class PrimerTrack extends AbstractTrack {
             int yHi = round == 0 ? 3 : 16;
             for (int i = ps.size() - 1; i >= 0; i--) {
                 Primer p = ps.get(i);
-                if (!chr.equals(p.chr)) continue;
-                Rectangle r = PrimerStore.screenRects.get(p);
+                if (!chr.equals(p.chr) || !inGroup(p)) continue;
+                Rectangle r = this.screenRects.get(p);
                 if (r == null) continue;
                 if (y >= r.y + yLo && y <= r.y + r.height + yHi
                         && x >= r.x - 6 && x <= r.x + r.width + 6) {
@@ -1134,7 +1285,7 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /** 工具条按钮动作（与右键菜单对应项一致） */
-    private static void runToolbar(String id) {
+    private void runToolbar(String id) {
         if ("edit".equals(id)) {
             if (PrimerEditTool.inEditMode()) PrimerEditTool.exitEditMode();
             else PrimerEditTool.enterEditMode();
@@ -1145,9 +1296,19 @@ public class PrimerTrack extends AbstractTrack {
             PrimerStore.setAutosave(!PrimerStore.autosaveEnabled);
             PrimerStore.refresh();
         } else if ("exp".equals(id)) {
-            ExportUtils.exportBED();
+            ExportUtils.exportBED(this.group);   // 仅导出本轨分组的引物
         } else if ("imp".equals(id)) {
             ExportUtils.importBED();
+        } else if ("close".equals(id)) {
+            // v0.1.36：关闭本轨 = 删除该分组全部引物 + 移除轨（带确认）
+            int n = PrimerStore.countGroup(this.group);
+            int r = JOptionPane.showConfirmDialog(null,
+                    "确认关闭本引物轨「" + groupLabel() + "」？\n将同时删除其下 " + n + " 条引物（建议先点「导出BED」备份）。\n此操作不可撤销。",
+                    "关闭引物轨", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (r == JOptionPane.YES_OPTION) {
+                PrimerStore.removeGroup(this.group);
+                PrimerPlugin.closeTrack(this);
+            }
         } else if ("setRead".equals(id)) {
             try {
                 int r1 = Math.max(0, parseIntField("r1", PrimerStore.defaultReadF));
@@ -1178,7 +1339,7 @@ public class PrimerTrack extends AbstractTrack {
     }
 
     /** 屏幕坐标 (x,y) 是否落在当前染色体的工具条区域内（供编辑工具在工具条上做点击时跳过平移/拖拽） */
-    public static boolean isInToolbar(int x, int y, String chr) {
+    public boolean isInToolbar(int x, int y, String chr) {
         if (toolbarRect == null || !chr.equals(toolbarChr)) return false;
         return toolbarRect.contains(x, y);
     }

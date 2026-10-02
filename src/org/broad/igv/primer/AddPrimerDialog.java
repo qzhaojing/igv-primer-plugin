@@ -18,7 +18,7 @@ import java.awt.event.ActionListener;
  */
 public class AddPrimerDialog {
 
-    public static void show(final int bp, final Primer existing) {
+    public static void show(final int bp, final Primer existing, final String group) {
         Frame owner = IGV.getMainFrame();
         final JDialog dlg = new JDialog(owner, existing == null ? "添加引物" : "编辑引物 " + existing.name, true);
         dlg.setLayout(new BorderLayout(6, 6));
@@ -336,7 +336,7 @@ public class AddPrimerDialog {
                     if (existing == null) {
                         Primer p = new Primer(name, chr, s, en, strand, role, readLen, ampliconId);
                         p.pairWith = pairText.isEmpty() ? null : pairText;
-                        p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
+                        p.group = group;   // 写入打开对话框的那条引物轨所属分组
                         PrimerStore.add(p);
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
                         // v0.1.30：添加时不再自动跑 O(n²) 二聚体评估，仅在用户点击「评估二聚体」时按需计算
@@ -399,7 +399,7 @@ public class AddPrimerDialog {
         int readLen = PrimerStore.defaultIncludeLen ? Math.max(0, raw - PrimerStore.defaultLen) : raw;
         Primer p = new Primer(PrimerStore.nextName(), chr, bp, bp + PrimerStore.defaultLen,
                 PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, PrimerStore.nextAmplicon());
-        p.group = PrimerStore.selected != null ? PrimerStore.selected.group : null;
+        p.group = (PrimerStore.selected != null ? PrimerStore.selected.group : null);
         PrimerStore.add(p);
         // v0.1.30：快速添加不再自动跑 O(n²) 二聚体评估
         PrimerStore.refresh();

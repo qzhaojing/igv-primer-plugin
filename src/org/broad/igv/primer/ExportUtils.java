@@ -47,14 +47,20 @@ public class ExportUtils {
 
     // ---------- 1) BED ----------
 
-    public static void exportBED() {
+    public static void exportBED() { exportBED(null); }
+
+    /** 导出指定分组的引物到 BED（group==null 导出全部）。每个来源 BED 各成独立轨，导出互不污染。 */
+    public static void exportBED(String group) {
         File f = pick(true, "primers.bed", "BED 文件", "bed");
         if (f == null) return;
         if (!confirmOverwrite(f)) return;
         try {
-            int n = PrimerStore.getPrimers().size();
-            writeBED(f);
+            List<Primer> list = (group == null) ? PrimerStore.getPrimers() : PrimerStore.getPrimersByGroup(group);
+            int n = list.size();
+            if (n == 0) { JOptionPane.showMessageDialog(null, "本轨没有可导出的引物。"); return; }
+            writeBED(f, list);
             JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物到 BED: " + f.getAbsolutePath()
+                    + (group == null ? "" : "（来源：" + group + "）")
                     + "\n可直接拖入 IGV 查看（箭头方向/thick 测序区/颜色已含）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
@@ -63,15 +69,20 @@ public class ExportUtils {
 
     /** 静默写 BED（自动保存用，不弹窗）。格式与 exportBED 一致，可被 parseBED 完整还原（配对组/颜色/测序长度）。 */
     public static synchronized void writeBED(File f) throws Exception {
+        writeBED(f, PrimerStore.getPrimers());
+    }
+
+    /** 静默写指定引物列表到 BED（按组导出/自动保存复用）。 */
+    private static synchronized void writeBED(File f, List<Primer> primers) throws Exception {
         BufferedWriter w = new BufferedWriter(new FileWriter(f));
         try {
             w.write("track name=\"Primer Designer\" description=\"primers; thick=primer body; color=strand/fail\" itemRgb=\"On\"");
             w.newLine();
-            for (Primer p : PrimerStore.getPrimers()) {
+            java.util.Map<Primer, Integer> rows = PrimerTrack.allScreenRows();
+            for (Primer p : primers) {
                 // thick 限制在 [start,end] 内（= 引物本体），测序延长区单独展示、不合并进引物长度
                 // v0.1.6：把当前布局行号写死进 name（|r行号），导入/自动保存可原样恢复上下排布
-                Integer row = PrimerStore.screenRows.containsKey(p)
-                        ? PrimerStore.screenRows.get(p) : p.rowOverride;
+                Integer row = rows.containsKey(p) ? rows.get(p) : p.rowOverride;
                 w.write(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
                         p.chr, p.start, p.end, p.bedName(row), p.strand, p.start, p.end, p.colorHex()));
                 w.newLine();
@@ -81,20 +92,24 @@ public class ExportUtils {
         }
     }
 
-    /** 自动保存文件：~/.igv_primer_autosave.bed（session 不保存插件轨，用它兜底防丢失） */
+    /** 自动保存文件：~/.igv_primer_autosave.bed（session 不保存插件轨，用它兜底防丢失；包含所有分组） */
     public static File autosaveFile() {
         return new File(System.getProperty("user.home"), ".igv_primer_autosave.bed");
     }
 
-    /** 从自动保存恢复：静默解析并加入可编辑的 PrimerTrack，返回条数；无文件或解析失败返回 0。 */
+    /** 从自动保存恢复：静默解析（分组从 BED 内嵌 |g 还原），按分组重建独立轨，返回条数；无文件或解析失败返回 0。 */
     public static int restoreAutosave() {
         File f = autosaveFile();
         if (!f.exists()) return 0;
         try {
             List<Primer> all = new ArrayList<Primer>();
-            int n = parseBED(f, "autosave", all);
+            int n = parseBED(f, null, all);   // group 默认 null，有 |g 则还原到原分组
             if (n == 0) return 0;
             PrimerStore.addAll(all);
+            // 为每个出现的分组确保一条独立轨
+            java.util.Set<String> groups = new java.util.HashSet<String>();
+            for (Primer p : all) groups.add(p.group);
+            for (String g : groups) PrimerPlugin.ensureTrackForGroup(g);
             PrimerStore.refreshAll();
             return n;
         } catch (Exception ignore) {
@@ -187,23 +202,25 @@ public class ExportUtils {
         if (fs.length == 0) return;
         lastDir = fs[0].getParentFile();
         try {
-            List<Primer> all = new ArrayList<Primer>();
             StringBuilder msg = new StringBuilder();
             int total = 0;
             for (File f : fs) {
-                // 分组名 = 文件名（去 .bed 后缀），同组才可共用一行
+                // 分组名 = 文件名（去 .bed 后缀）；每个 BED 一个独立分组 → 一条独立引物轨
                 String group = f.getName().replaceAll("(?i)\\.bed$", "");
-                int n = parseBED(f, group, all);
+                List<Primer> list = new ArrayList<Primer>();
+                int n = parseBED(f, group, list);
+                if (n == 0) continue;
+                PrimerPlugin.ensureTrackForGroup(group);   // 空轨认领 / 否则新建独立轨
+                PrimerStore.addAll(list);
                 total += n;
-                msg.append(f.getName()).append(" → ").append(n).append(" 条\n");
+                msg.append(f.getName()).append(" → ").append(n).append(" 条（独立轨：「").append(group).append("」）\n");
             }
             if (total == 0) {
                 JOptionPane.showMessageDialog(null, "未解析到有效 BED 行（需 ≥6 列）");
                 return;
             }
-            PrimerStore.addAll(all);
             PrimerStore.refreshAll();
-            JOptionPane.showMessageDialog(null, "已导入 " + total + " 条引物（每个 BED 独立分组分行）：\n" + msg);
+            JOptionPane.showMessageDialog(null, "已导入 " + total + " 条引物（每个 BED 独立成轨，可分别编辑/导出/关闭）：\n" + msg);
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导入失败: " + ex.getMessage());
         }

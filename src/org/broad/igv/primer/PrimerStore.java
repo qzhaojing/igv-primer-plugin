@@ -21,17 +21,10 @@ import java.util.Properties;
 public class PrimerStore {
 
     private static final List<Primer> primers = new ArrayList<Primer>();
-    private static PrimerTrack track;
     public static Primer selected;
     public static String lastChr;   // 最近渲染的染色体（快速添加用）
 
-    // 渲染时记录每条引物在屏幕上的矩形（含 y），供编辑工具做命中检测
-    public static final java.util.Map<Primer, Rectangle> screenRects =
-            new java.util.HashMap<Primer, Rectangle>();
-
-    // 渲染时记录每条引物所在行号（供上下拖动换行计算用）
-    public static final java.util.Map<Primer, Integer> screenRows =
-            new java.util.HashMap<Primer, Integer>();
+    // 注：screenRects/screenRows 已下放到每条 PrimerTrack 实例（多轨各自记录，避免渲染时互相覆盖）。
 
     // 右键菜单"显示序列"开关：选中后在引物下方画碱基序列
     public static boolean showSeq = false;
@@ -62,10 +55,6 @@ public class PrimerStore {
         return new ArrayList<Primer>(primers);
     }
 
-    public static synchronized void setTrack(PrimerTrack t) {
-        track = t;
-    }
-
     public static synchronized void add(Primer p) {
         primers.add(p);
         linkByName(p);
@@ -94,6 +83,46 @@ public class PrimerStore {
         for (Primer p : list) linkByName(p);   // 导入 BED 时按 pairWith 名回链配对（重连 ampliconId）
         refresh();
         autosave(true);
+    }
+
+    // ---------- 分组（来源 BED 文件名）操作：多轨各自独立增删改/存关 ----------
+
+    /** 返回指定分组（group）的引物列表（group==null 表示"未分组/手动添加"）。 */
+    public static synchronized List<Primer> getPrimersByGroup(String group) {
+        java.util.List<Primer> out = new java.util.ArrayList<Primer>();
+        for (Primer p : primers) {
+            boolean match = (group == null) ? (p.group == null) : group.equals(p.group);
+            if (match) out.add(p);
+        }
+        return out;
+    }
+
+    /** 统计指定分组的引物条数。 */
+    public static synchronized int countGroup(String group) {
+        int n = 0;
+        for (Primer p : primers) {
+            boolean match = (group == null) ? (p.group == null) : group.equals(p.group);
+            if (match) n++;
+        }
+        return n;
+    }
+
+    /** 移除整个分组的引物（关闭轨道时调用）；返回删除条数。同步清理孤立配对并刷新。 */
+    public static synchronized int removeGroup(String group) {
+        java.util.List<Primer> keep = new java.util.ArrayList<Primer>();
+        int cnt = 0;
+        for (Primer p : primers) {
+            boolean match = (group == null) ? (p.group == null) : group.equals(p.group);
+            if (match) cnt++; else keep.add(p);
+        }
+        if (cnt == 0) return 0;
+        primers.clear();
+        primers.addAll(keep);
+        if (selected != null && !primers.contains(selected)) selected = null;
+        cleanOrphanPairs();   // 被删分组遗留的孤立配对（残留 ampliconId/pairWith）清理
+        refresh();
+        autosave(true);
+        return cnt;
     }
 
     // ---------- 自动保存（IGV session XML 不保存插件注入的 PrimerTrack，用它兜底防丢失） ----------
@@ -237,53 +266,15 @@ public class PrimerStore {
     }
 
     /**
-     * 轻量化刷新（v0.1.17）：
-     *  - 仅当引物轨"高度（行数）"发生变化（新增/删除导致出现或消失一行）时，才调用昂贵的 IGV.doRefresh()
+     * 轻量化刷新（v0.1.17 升级为多轨）：
+     *  - 仅当某条引物轨"高度（行数）"发生变化（新增/删除导致出现或消失一行）时，才调用昂贵的 IGV.doRefresh()
      *    （它会重绘全部轨道并重载数据，是添加/点击卡顿的根因）；
-     *  - 其余改动（改色/配对/选择/同排新增等不影响行数）只重绘引物轨自身所在面板，不碰其他 14 条轨道。
+     *  - 其余改动（改色/配对/选择/同排新增等不影响行数）只重绘各引物轨面板，不碰其他轨道。
+     *  多轨刷新逻辑委托给 PrimerTrack.refreshAllTracks（逐轨计算高度、决定是否全量/局部重绘，且均走 EDT）。
      */
     public static void refresh() {
-        // 轻量化刷新（v0.1.17）：行数变化才全量 doRefresh，否则仅重绘引物轨面板。
-        // v0.1.18：doRefresh()/repaint() 必须在 EDT 执行；此处保证调用方无论在主线程还是后台线程都安全。
-        if (track != null) {
-            final int oldH = track.getHeight();
-            final int newH = PrimerTrack.computeNeededHeight(lastChr);
-            track.update();
-            if (newH != oldH) {
-                runOnEDT(new Runnable() {
-                    public void run() { IGV.getInstance().doRefresh(); }   // 行数变化 → 全量重排（重算各轨布局高度）
-                });
-            } else {
-                runOnEDT(new Runnable() {
-                    public void run() { repaintTrackOnly(); }              // 仅引物轨区域重绘
-                });
-            }
-        } else {
-            runOnEDT(new Runnable() {
-                public void run() { IGV.getInstance().doRefresh(); }       // 未挂载轨时退回全量（兜底，极少触发）
-            });
-        }
+        PrimerTrack.refreshAllTracks(lastChr);
         autosave(false);   // 节流自动保存（磁盘 I/O，保持同步、不进 EDT）
-    }
-
-    /** 在 EDT 上执行 r；若当前已是 EDT 则立即执行。使 refresh() 对后台线程调用方同样安全。 */
-    private static void runOnEDT(Runnable r) {
-        if (SwingUtilities.isEventDispatchThread()) r.run();
-        else SwingUtilities.invokeLater(r);
-    }
-
-    /** 仅重绘引物轨自身所在的 TrackPanel；取不到面板时退化为 repaintDataPanels（仍比重绘全部数据便宜）。 */
-    private static void repaintTrackOnly() {
-        if (track == null) return;
-        try {
-            TrackPanel tp = TrackPanel.getParentPanel(track);
-            if (tp != null) {
-                tp.repaint();
-                return;
-            }
-        } catch (Throwable ignore) {
-        }
-        IGV.getInstance().repaintDataPanels();
     }
 
     public static synchronized String nextName() {
@@ -342,7 +333,7 @@ public class PrimerStore {
         c.ampliconId = null;   // 复制体独立，不污染原配对组连线
         c.pairWith = null;
         c.name = uniqueIncrementedName(src.name);
-        Integer r = screenRows.get(src);
+        Integer r = PrimerTrack.allScreenRows().get(src);
         c.rowOverride = (r == null) ? null : (r + 1);   // 紧贴原引物下方一行
         primers.add(c);
         refreshSequence(c);

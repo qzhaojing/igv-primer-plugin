@@ -156,7 +156,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (chr == null) return getCursor();
         Primer hit = findPrimerAt(e.getX(), e.getY(), chr);
         if (hit != null) {
-            java.awt.Rectangle r = PrimerStore.screenRects.get(hit);
+            java.awt.Rectangle r = PrimerTrack.allScreenRects().get(hit);
             boolean edge = Math.abs(e.getX() - r.x) <= EDGE_PX
                     || Math.abs(e.getX() - (r.x + r.width)) <= EDGE_PX;
             return Cursor.getPredefinedCursor(edge ? Cursor.E_RESIZE_CURSOR : Cursor.MOVE_CURSOR);
@@ -246,7 +246,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 }
                 if (dRow != 0) {
                     int base = sel.rowOverride != null ? sel.rowOverride
-                            : (PrimerStore.screenRows.get(sel) != null ? PrimerStore.screenRows.get(sel) : 0);
+                            : (PrimerTrack.allScreenRows().get(sel) != null ? PrimerTrack.allScreenRows().get(sel) : 0);
                     sel.rowOverride = Math.max(0, base + dRow);
                 }
                 PrimerStore.refresh();
@@ -316,7 +316,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         int y = e.getY();
 
         // v0.1.19：点击落在 track 顶部工具条上 → 交给 PrimerTrack.handleDataClick 处理，不平移/不拖拽
-        if (PrimerTrack.isInToolbar(x, y, chr)) return;
+        if (PrimerTrack.isInToolbarAny(x, y, chr)) return;
 
         dragging = null;
         mode = MODE_NONE;
@@ -348,7 +348,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
 
         if (hit != null) {
-            java.awt.Rectangle r = PrimerStore.screenRects.get(hit);
+            java.awt.Rectangle r = PrimerTrack.allScreenRects().get(hit);
             int xl = r.x;
             int xr = r.x + r.width;
             boolean edge = Math.abs(x - xl) <= EDGE_PX || Math.abs(x - xr) <= EDGE_PX;
@@ -358,7 +358,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             mode = edge ? (Math.abs(x - xl) <= EDGE_PX ? MODE_RESIZE_L : MODE_RESIZE_R) : MODE_MOVE;
             dragAnchorBp = bp;
             pressY = y;
-            Integer r0 = PrimerStore.screenRows.get(hit);
+            Integer r0 = PrimerTrack.allScreenRows().get(hit);
             origRow = r0 == null ? 0 : r0;
             PrimerStore.selected = hit;
             dp.repaint();
@@ -387,7 +387,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             for (int i = ps.size() - 1; i >= 0; i--) {
                 Primer p = ps.get(i);
                 if (!chr.equals(p.chr)) continue;
-                java.awt.Rectangle r = PrimerStore.screenRects.get(p);
+                java.awt.Rectangle r = PrimerTrack.allScreenRects().get(p);
                 if (r == null) continue;
                 if (y >= r.y + yLo && y <= r.y + r.height + yHi
                         && x >= r.x - EDGE_PX && x <= r.x + r.width + EDGE_PX) {
@@ -406,7 +406,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             if (frame == null) return;
             Primer hit = findPrimerAt(e.getX(), e.getY(), frame.getChrName());
             if (hit != null) {
-                AddPrimerDialog.show((int) Math.round(frame.getChromosomePosition(e.getX())), hit);
+                AddPrimerDialog.show((int) Math.round(frame.getChromosomePosition(e.getX())), hit, hit.group);
             }
         }
     }
