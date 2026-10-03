@@ -79,12 +79,24 @@ public class ExportUtils {
             w.write("track name=\"Primer Designer\" description=\"primers; thick=primer body; color=strand/fail\" itemRgb=\"On\"");
             w.newLine();
             java.util.Map<Primer, Integer> rows = PrimerTrack.allScreenRows();
+            // v0.1.40：单条成组（组内仅 1 条）的 ampliconId 不写入 BED——无连线意义，纯污染下次导入
+            java.util.Map<String, Integer> grpCnt = new java.util.HashMap<String, Integer>();
+            for (Primer p : primers) {
+                if (p.ampliconId == null) continue;
+                Integer c = grpCnt.get(p.ampliconId);
+                grpCnt.put(p.ampliconId, c == null ? 1 : c + 1);
+            }
             for (Primer p : primers) {
                 // thick 限制在 [start,end] 内（= 引物本体），测序延长区单独展示、不合并进引物长度
                 // v0.1.6：把当前布局行号写死进 name（|r行号），导入/自动保存可原样恢复上下排布
                 Integer row = rows.containsKey(p) ? rows.get(p) : p.rowOverride;
+                String nm = p.bedName(row);
+                Integer gc = grpCnt.get(p.ampliconId);
+                if (p.ampliconId != null && (gc == null || gc < 2)) {
+                    nm = nm.replaceAll("\\|a[^|]*", "");
+                }
                 w.write(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
-                        p.chr, p.start, p.end, p.bedName(row), p.strand, p.start, p.end, p.colorHex()));
+                        p.chr, p.start, p.end, nm, p.strand, p.start, p.end, p.colorHex()));
                 w.newLine();
             }
         } finally {
@@ -270,9 +282,10 @@ public class ExportUtils {
                     role = parts[1];
                 }
             }
+            // v0.1.40：BED 无 |a 标记 → ampliconId 一律 null（此前每次导入都发新 id，
+            // 把历史自动配对时代的共享 id 连同新 id 一起写进 autosave/导出 BED，重载即复活连线）
             Primer p = new Primer(name, t[0], Integer.parseInt(t[1]), Integer.parseInt(t[2]),
-                    "+".equals(t[5]) ? '+' : '-', role, readLen,
-                    aId != null ? aId : PrimerStore.nextAmplicon());
+                    "+".equals(t[5]) ? '+' : '-', role, readLen, aId);
             p.group = g;
             p.pairWith = pairWith;
             p.color = color;
@@ -281,6 +294,39 @@ public class ExportUtils {
             n++;
         }
         r.close();
+        sanitizeAmpliconGroups(out);   // v0.1.40：剥离可疑 |a 组（跨染色体 / 跨度>10kb / 单条成组）
         return n;
+    }
+
+    /**
+     * v0.1.40：导入侧配对组 sanity 净化（彻底根治历史自动配对污染复活）。
+     *  - 真实 PCR 扩增子组跨度只有几百 bp（实测 0.2~0.5kb），同组跨染色体或总跨度 >10kb
+     *    只可能是旧版自动配对 bug 留下的串组（如 1.4Mb 跨度组）→ 剥离其 ampliconId；
+     *  - 单条成组（|a 组内仅 1 条）无连线意义 → 一并置 null，不再写回文件污染导出。
+     *  用户手动 Ctrl+点击 的正常配对（异链 + R.end-F.start>0 + 跨度小）不受影响。
+     */
+    private static void sanitizeAmpliconGroups(List<Primer> out) {
+        java.util.Map<String, List<Primer>> groups = new java.util.HashMap<String, List<Primer>>();
+        for (Primer p : out) {
+            if (p.ampliconId == null) continue;
+            List<Primer> l = groups.get(p.ampliconId);
+            if (l == null) { l = new ArrayList<Primer>(); groups.put(p.ampliconId, l); }
+            l.add(p);
+        }
+        for (java.util.Map.Entry<String, List<Primer>> e : groups.entrySet()) {
+            List<Primer> ms = e.getValue();
+            if (ms.size() < 2) { ms.get(0).ampliconId = null; continue; }
+            boolean bad = false;
+            int s = Integer.MAX_VALUE, en = Integer.MIN_VALUE;
+            String chr = ms.get(0).chr;
+            for (Primer m : ms) {
+                if (m.chr == null || !m.chr.equals(chr)) { bad = true; break; }
+                s = Math.min(s, m.start);
+                en = Math.max(en, m.end);
+            }
+            if (bad || (en - s) > 10000) {
+                for (Primer m : ms) m.ampliconId = null;
+            }
+        }
     }
 }

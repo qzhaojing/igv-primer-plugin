@@ -313,8 +313,7 @@ public class AddPrimerDialog {
         // 打开即预览一次
         updatePreview.run();
 
-        final String ampliconId = existing == null ? PrimerStore.nextAmplicon() : existing.ampliconId;
-
+        // v0.1.40：删除死变量 ampliconId（原 new Primer 已传 null，它只剩推进 nextAmplicon 计数的副作用）。
         ok.addActionListener(new ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent e) {
                 try {
@@ -432,7 +431,7 @@ public class AddPrimerDialog {
         int raw = "R1".equals(PrimerStore.defaultRole) ? PrimerStore.defaultReadF : PrimerStore.defaultReadR;
         int readLen = PrimerStore.defaultIncludeLen ? Math.max(0, raw - PrimerStore.defaultLen) : raw;
         Primer p = new Primer(PrimerStore.nextName(), chr, bp, bp + PrimerStore.defaultLen,
-                PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, PrimerStore.nextAmplicon());
+                PrimerStore.defaultStrand, PrimerStore.defaultRole, readLen, null);   // v0.1.40：不再发 ampliconId，配对时才生成
         p.group = (PrimerStore.selected != null ? PrimerStore.selected.group : null);
         PrimerStore.add(p);
         // v0.1.30：快速添加不再自动跑 O(n²) 二聚体评估
