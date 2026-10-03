@@ -84,7 +84,10 @@ public class PrimerStore {
 
     public static synchronized void addAll(List<Primer> list) {
         primers.addAll(list);
-        for (Primer p : list) linkByName(p);   // 导入 BED 时按 pairWith 名回链配对（重连 ampliconId）
+        for (Primer p : list) {
+            refreshSequence(p);   // v0.1.43：导入/恢复也要刷序列与指标（否则 p.seq 空 → 编辑框/导出 FASTA 全空）
+            linkByName(p);        // 导入 BED 时按 pairWith 名回链配对（重连 ampliconId）
+        }
         refresh();
         autosave(true);
     }
@@ -152,7 +155,10 @@ public class PrimerStore {
             p.seq = "";
         } else {
             byte[] b = g.getSequence(p.chr, p.start, p.end);
-            p.seq = b == null ? "" : new String(b).toUpperCase();
+            String fwd = b == null ? "" : new String(b).toUpperCase();
+            // v0.1.43：p.seq 统一存「实际引物序列 5'->3'」。反向链引物 = 正链区间序列的反向互补，
+            // 这样编辑框/导出/轨内显示/指标计算（Tm/GC/hairpin/self）全部一致且生物学正确。
+            p.seq = (p.strand == '+' || fwd.isEmpty()) ? fwd : PrimerMetrics.revComp(fwd);
         }
         PrimerMetrics.evaluate(p);
     }

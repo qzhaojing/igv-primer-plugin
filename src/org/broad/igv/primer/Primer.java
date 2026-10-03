@@ -21,7 +21,7 @@ public class Primer {
     // v0.1.41 边模型：每条 F-R 连线是一条独立的边，存对端引物名。一个引物可同时持有多条边（1 对多），
     // 取消/新增只作用于单条边，不影响该引物的其他边。渲染/布局/保存全部基于此集合。
     public java.util.Set<String> pairedWith = new java.util.LinkedHashSet<String>();
-    public String seq;       // 当前覆盖区序列（正链方向，随编辑自动更新）
+    public String seq;       // 实际引物序列 5'->3'（反向链引物=正链区间序列的反向互补，写入时即转好；随编辑自动更新）
     public String color;     // 自定义颜色（hex RRGGBB，null=按链默认色；右键色块设置）
     public Integer rowOverride; // 手动指定行号（上下拖动设置；null=自动布局）
 

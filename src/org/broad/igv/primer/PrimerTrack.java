@@ -787,7 +787,7 @@ public class PrimerTrack extends AbstractTrack {
 
         // v8：显示碱基序列（右键开关；5'->3' 方向；缩放足够时才画，避免糊成一团）
         if (PrimerStore.showSeq && p.seq != null && !p.seq.isEmpty()) {
-            String s = p.strand == '+' ? p.seq : PrimerMetrics.revComp(p.seq);
+            String s = p.seq;
             if (w >= s.length() * 3) {
                 g.setColor(new Color(120, 40, 140));
                 g.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 9));
@@ -870,7 +870,7 @@ public class PrimerTrack extends AbstractTrack {
                 sb.append("</font>");
             }
             if (p.seq != null && !p.seq.isEmpty()) {
-                String s = p.strand == '+' ? p.seq : PrimerMetrics.revComp(p.seq);
+                String s = p.seq;
                 sb.append("<br>序列 5'→3': <font face='monospaced'>").append(s).append("</font>");
             }
             return sb.toString();

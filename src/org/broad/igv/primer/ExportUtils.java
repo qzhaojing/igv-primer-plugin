@@ -148,10 +148,9 @@ public class ExportUtils {
         }
     }
 
-    /** 引物序列：按各自方向输出 5'->3'（反链引物输出反向互补） */
+    /** 引物序列：p.seq 已存实际引物 5'->3'（R 在写入时已是反向互补），直接返回即可 */
     private static String primerSeq(Primer p) {
-        if (p.seq == null) return "";
-        return p.strand == '+' ? p.seq : PrimerMetrics.revComp(p.seq);
+        return p.seq == null ? "" : p.seq;
     }
 
     // ---------- 3) 测序读段（引物 + 测序延长区） ----------

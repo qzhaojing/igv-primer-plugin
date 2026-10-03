@@ -227,7 +227,9 @@ public class AddPrimerDialog {
                     p.chr = chr; p.start = s; p.end = e;
                     p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
                     p.role = (String) roleC.getSelectedItem();
-                    p.seq = readSeqFromGenome(chr, s, e);
+                    String rawSeq = readSeqFromGenome(chr, s, e);
+                    // v0.1.43：预览序列也存实际引物（R 反向互补），与导出/指标一致
+                    p.seq = (p.strand == '+' || rawSeq.isEmpty()) ? rawSeq : PrimerMetrics.revComp(rawSeq);
                     PrimerMetrics.evaluate(p);
                     cur[0] = p;
                     display.run();
