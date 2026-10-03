@@ -177,14 +177,14 @@ public class PrimerMetrics {
     /**
      * 计算两条序列的最佳互补比对形状（self-dimer：b 传自身；hetero-dimer：b 传配对伙伴）。
      * 复用 dimerDG 的滑动打分逻辑，返回三行文本：上链 5'->3' / 配对竖线 / 下链 3'->5'
-     * （下链为反互补反向显示，呈反向平行；配对处画 '|'，错配/凸出留空格）。
+     * （下链显示伙伴引物 b 本体、按反向平行 3'->5' 排布；配对处上下链碱基互补，画 '|'）。
+     * v0.1.44 修复：原实现下链多翻转一次导致显示错位、竖线连的是相同碱基；现竖线=互补碱基。
      */
     public static DimerShape dimerShape(String a, String b) {
         DimerShape sh = new DimerShape();
         if (a == null || b == null || a.length() < 4 || b.length() < 4) return sh;
         String top = a.toUpperCase();
-        String botRaw = revComp(b.toUpperCase());                 // 5'->3'
-        String botDisp = new StringBuilder(botRaw).reverse().toString(); // 3'->5'（反向平行显示，= comp(b)）
+        String botRaw = revComp(b.toUpperCase());                 // 5'->3'；top 与 botRaw 同位同碱基 = 互补配对
         int n = top.length(), m = botRaw.length();
         // 找最佳偏移（与 dimerDG 同口径：最负 ΔG）
         double bestDG = 0;
@@ -226,12 +226,11 @@ public class PrimerMetrics {
         for (int c = 0; c < W; c++) {
             int topIdx = c + lo;
             if (topIdx >= 0 && topIdx < n) tA[c] = top.charAt(topIdx);
-            int botRawIdx = (c + lo) - bestOff; // = k - bestOff = j
-            if (botRawIdx >= 0 && botRawIdx < m) {
-                int dispIdx = m - 1 - botRawIdx;
-                bA[c] = botDisp.charAt(dispIdx);
+            int j = (c + lo) - bestOff;   // botRaw 下标，与 topIdx 对齐（top[k]==botRaw[j] 即互补配对）
+            if (j >= 0 && j < m) {
+                bA[c] = comp(botRaw.charAt(j));   // v0.1.44：下链显示伙伴引物 b 本体（3'->5'），= botRaw 该位的互补
                 if (topIdx >= 0 && topIdx < n && tA[c] != ' ') {
-                    if (tA[c] == bA[c]) bd[c] = '|'; // top==revComp(b) 即互补配对
+                    if (tA[c] == botRaw.charAt(j)) bd[c] = '|';   // v0.1.44：互补碱基才画竖线
                 }
             }
         }
