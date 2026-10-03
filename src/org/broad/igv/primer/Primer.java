@@ -33,6 +33,9 @@ public class Primer {
     public boolean pass = true;
     public String failReasons = "";  // 长度/Tm/GC/hairpin/self 等非二聚体原因（PrimerMetrics.evaluate 设置）
 
+    // 全体系异源二聚体 Top-5（与其他所有引物相比，按 ΔG 最负排序）
+    public java.util.List<HeteroHit> topHetero = new java.util.ArrayList<HeteroHit>();
+
     public Primer() {
     }
 
@@ -127,6 +130,15 @@ public class Primer {
         p.dimerReason = dimerReason;
         p.pass = pass;
         p.failReasons = failReasons;
+        p.topHetero = new java.util.ArrayList<HeteroHit>(topHetero);
         return p;
+    }
+
+    /** 一条异源二聚体命中记录（与其他引物相比） */
+    public static class HeteroHit {
+        public String partnerName;
+        public double dg;   // ΔG，越负越危险
+        public int c3;      // 3' 互补碱基数
+        public HeteroHit(String n, double d, int c) { partnerName = n; dg = d; c3 = c; }
     }
 }

@@ -1,5 +1,6 @@
 package org.broad.igv.primer;
 
+import org.broad.igv.primer.Primer.HeteroHit;
 import org.broad.igv.feature.genome.Genome;
 import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
@@ -99,17 +100,25 @@ public class AddPrimerDialog {
         heteroArea.setEditable(false);
         heteroArea.setLineWrap(false);
         heteroArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        // v0.1.39：全体系异源二聚体 Top-5 文本框（与其他所有引物相比，ΔG 最负优先）
+        final JTextArea topArea = new JTextArea(6, 36);
+        topArea.setEditable(false);
+        topArea.setLineWrap(false);
+        topArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JPanel selfBox = new JPanel(new BorderLayout());
         selfBox.setBorder(new TitledBorder("self-dimer"));
         selfBox.add(selfArea, BorderLayout.CENTER);
         JPanel heteroBox = new JPanel(new BorderLayout());
-        heteroBox.setBorder(new TitledBorder("异源二聚体（仅配对伙伴）"));
+        heteroBox.setBorder(new TitledBorder("最差异源二聚体（全体系）"));
         heteroBox.add(heteroArea, BorderLayout.CENTER);
         JPanel dimerPanel = new JPanel();
         dimerPanel.setLayout(new BoxLayout(dimerPanel, BoxLayout.X_AXIS));
         dimerPanel.add(selfBox);
         dimerPanel.add(Box.createHorizontalStrut(12));
         dimerPanel.add(heteroBox);
+        JPanel topBox = new JPanel(new BorderLayout());
+        topBox.setBorder(new TitledBorder("Top-5 异源二聚体（全体系所有引物）"));
+        topBox.add(new JScrollPane(topArea), BorderLayout.CENTER);
 
         int r3 = 0;
         addRow(eval, gce, r3++, "序列", seqScroll);
@@ -122,6 +131,7 @@ public class AddPrimerDialog {
         addRow(eval, gce, r3++, "评估状态", statusL);
         gce.gridwidth = 2;
         addRow(eval, gce, r3++, "二聚体排布", dimerPanel);
+        addRow(eval, gce, r3++, "异源二聚体 Top-5", topBox);
         gce.gridwidth = 1;
 
         // 容器
@@ -226,40 +236,50 @@ public class AddPrimerDialog {
                             ? selfSh.topLine + "\n" + selfSh.bondLine + "\n" + selfSh.botLine
                             : "（序列过短或未加载参考基因组）");
 
-                    // 异源二聚体形状：仅针对「配对引物名称」里填的伙伴，绝不扫全体引物
-                    String partnerText = pairF.getText().trim();
-                    Primer partner = null;
-                    double worst = 0;
-                    if (!partnerText.isEmpty()) {
-                        for (String nm : partnerText.split("[,;\\s]+")) {
-                            for (Primer q : PrimerStore.getPrimers()) {
-                                if (q.name == null || !q.name.equals(nm)) continue;
-                                if (q.seq == null || q.seq.length() < 4) break;
-                                PrimerMetrics.DimerShape sh = PrimerMetrics.dimerShape(p.seq, q.seq);
-                                if (sh.valid && sh.dg < worst - 1e-9) { worst = sh.dg; partner = q; }
-                                break;
-                            }
+                    // v0.1.39：全体系异源二聚体（与其他所有引物相比）—— 计算 Top-5 并渲染
+                    PrimerStore.evaluateOneAgainstAll(p);
+                    // 最差异源二聚体形状（#1）：展示全体系最危险伙伴的比对形状
+                    if (!p.topHetero.isEmpty()) {
+                        HeteroHit h0 = p.topHetero.get(0);
+                        Primer partner = null;
+                        for (Primer q : PrimerStore.getPrimers()) {
+                            if (q.name != null && q.name.equals(h0.partnerName)
+                                    && q.seq != null && q.seq.length() >= 4) { partner = q; break; }
                         }
-                    }
-                    StringBuilder sb = new StringBuilder();
-                    if (partner != null) {
-                        PrimerMetrics.DimerShape hSh = PrimerMetrics.dimerShape(p.seq, partner.seq);
-                        heteroArea.setText(hSh.topLine + "\n" + hSh.bondLine + "\n" + hSh.botLine);
-                        heteroL.setText(partner.name + " " + String.format("%.1f", hSh.dg));
-                        int c3 = PrimerMetrics.max3pComplement(p.seq, partner.seq);
-                        if (hSh.dg <= PrimerStore.failHeteroDgTh || c3 >= PrimerStore.failHetero3pTh)
-                            sb.append("异源二聚体强(与").append(partner.name).append(") ");
+                        if (partner != null) {
+                            PrimerMetrics.DimerShape hSh = PrimerMetrics.dimerShape(p.seq, partner.seq);
+                            heteroArea.setText(hSh.valid
+                                    ? hSh.topLine + "\n" + hSh.bondLine + "\n" + hSh.botLine
+                                    : "（无法绘制比对）");
+                            heteroL.setText(h0.partnerName + " " + String.format("%.1f", h0.dg));
+                        } else {
+                            heteroArea.setText("（伙伴未载入序列）");
+                            heteroL.setText(h0.partnerName + " " + String.format("%.1f", h0.dg));
+                        }
                     } else {
-                        heteroArea.setText("（未指定配对引物；异源二聚体为其与配对伙伴间的相互作用。\n 在轨道 Ctrl+点击 配对，或本框填入「配对引物名称」后显示）");
+                        heteroArea.setText("（无其他引物可比对；导入/添加更多引物后显示全体系异源二聚体）");
                         heteroL.setText("—");
                     }
+                    // Top-5 列表
+                    StringBuilder tb = new StringBuilder();
+                    if (p.topHetero.isEmpty()) {
+                        tb.append("（无：无其他引物 / 未评估）");
+                    } else {
+                        for (int k = 0; k < p.topHetero.size(); k++) {
+                            HeteroHit h = p.topHetero.get(k);
+                            tb.append(String.format("%d. %-14s \u0394G=%6.1f  3'comp=%d%n",
+                                    k + 1, h.partnerName, h.dg, h.c3));
+                        }
+                    }
+                    topArea.setText(tb.toString());
 
-                    // 评估状态（合并单引物判据 + 异源二聚体）
+                    // 评估状态（合并单引物判据 + 全体系异源二聚体）
                     if (!p.failReasons.isEmpty()) {
-                        statusL.setText("不通过： " + p.failReasons + (sb.length() > 0 ? " " + sb : ""));
+                        statusL.setText("不通过： " + p.failReasons
+                                + (p.dimerReason.isEmpty() ? "" : " " + p.dimerReason));
                         statusL.setForeground(Color.RED);
-                    } else if (sb.length() > 0) {
-                        statusL.setText("不通过： " + sb.toString().trim());
+                    } else if (!p.dimerReason.isEmpty()) {
+                        statusL.setText("不通过： " + p.dimerReason);
                         statusL.setForeground(Color.RED);
                     } else {
                         statusL.setText("通过（self ΔG=" + String.format("%.1f", p.selfDG) + "）");
@@ -389,6 +409,19 @@ public class AddPrimerDialog {
 
         dlg.pack();
         dlg.setLocationRelativeTo(owner);
+
+        // v0.1.39：若配置了 MFEprimer，后台算一次全体系二聚体（不卡 UI），完成后刷新预览
+        if (PrimerStore.mfeExePath != null && !PrimerStore.mfeExePath.trim().isEmpty()) {
+            final java.util.List<Primer> snap = PrimerStore.getPrimers();
+            new javax.swing.SwingWorker<Void, Void>() {
+                protected Void doInBackground() {
+                    PrimerStore.updateMfeCache(snap);
+                    return null;
+                }
+                protected void done() { updatePreview.run(); }
+            }.execute();
+        }
+
         dlg.setVisible(true);
     }
 

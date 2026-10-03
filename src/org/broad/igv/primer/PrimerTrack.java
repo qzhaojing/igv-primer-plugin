@@ -491,6 +491,7 @@ public class PrimerTrack extends AbstractTrack {
         JTextField self = tf.apply(String.valueOf(PrimerStore.failSelfTh));
         JTextField h3 = tf.apply(String.valueOf(PrimerStore.failHetero3pTh));
         JTextField hdg = tf.apply(String.valueOf(PrimerStore.failHeteroDgTh));
+        JTextField mfe = tf.apply(PrimerStore.mfeExePath == null ? "" : PrimerStore.mfeExePath);
         JPanel p = new JPanel(new java.awt.GridLayout(0, 2, 6, 4));
         p.add(new JLabel("长度下限 (nt)"));            p.add(lenMin);
         p.add(new JLabel("长度上限 (nt)"));            p.add(lenMax);
@@ -502,6 +503,7 @@ public class PrimerTrack extends AbstractTrack {
         p.add(new JLabel("self-dimer ΔG 阈值 (≤即失败)")); p.add(self);
         p.add(new JLabel("配对 3' 互补阈值 (≥即失败)")); p.add(h3);
         p.add(new JLabel("配对二聚体 ΔG 阈值 (≤即失败)")); p.add(hdg);
+        p.add(new JLabel("MFEprimer 路径 (可选)"));    p.add(mfe);
         int r = JOptionPane.showConfirmDialog(null, p, "设置失败判定条件",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
@@ -516,6 +518,7 @@ public class PrimerTrack extends AbstractTrack {
             PrimerStore.failSelfTh = Double.parseDouble(self.getText().trim());
             PrimerStore.failHetero3pTh = Integer.parseInt(h3.getText().trim());
             PrimerStore.failHeteroDgTh = Double.parseDouble(hdg.getText().trim());
+            PrimerStore.mfeExePath = mfe.getText().trim();
             PrimerStore.saveFailConfig();
             PrimerStore.refreshAll();
             JOptionPane.showMessageDialog(null, "已更新失败判定条件，并重新评估全部引物。");
@@ -963,9 +966,16 @@ public class PrimerTrack extends AbstractTrack {
             }));
             menu.add(item("评估二聚体（重算序列+全局）", new Runnable() {
                 public void run() {
-                    PrimerStore.refreshSequence(hit);
-                    PrimerStore.evaluatePairs();
-                    PrimerStore.refresh();
+                    final java.util.List<Primer> snap = PrimerStore.getPrimers();
+                    new javax.swing.SwingWorker<Void, Void>() {
+                        protected Void doInBackground() {
+                            PrimerStore.refreshSequence(hit);
+                            PrimerStore.updateMfeCache(snap);   // 若配 MFEprimer，后台算全体系（不卡 UI）
+                            PrimerStore.evaluatePairs();
+                            return null;
+                        }
+                        protected void done() { PrimerStore.refresh(); }
+                    }.execute();
                 }
             }));
             // v0.1.16：复制选定引物——原引物正下方生成同款，名称末位数字+1

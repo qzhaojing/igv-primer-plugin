@@ -1,5 +1,6 @@
 package org.broad.igv.primer;
 
+import org.broad.igv.primer.Primer.HeteroHit;
 import org.broad.igv.feature.genome.Genome;
 import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
@@ -46,6 +47,9 @@ public class PrimerStore {
     public static double failSelfTh = -5.0;                    // self-dimer ΔG <= 此值 判为强
     public static int failHetero3pTh = 4;                      // 配对 3' 互补 >= 此值 判二聚体
     public static double failHeteroDgTh = -5.0;                // 配对二聚体 ΔG <= 此值 判二聚体
+
+    // MFEprimer 外部引擎（可选）：配置 exe 路径后用其热力学 dimer 计算替代内置估算；空=内置估算
+    public static String mfeExePath = "";
 
     static {
         loadDefaults();
@@ -166,6 +170,9 @@ public class PrimerStore {
      */
     private static final java.util.concurrent.ConcurrentHashMap<String, double[]> dimerCache =
             new java.util.concurrent.ConcurrentHashMap<String, double[]>();
+    // MFEprimer 结果缓存（key=seqA\u0001seqB → [ΔG, 3'comp]），优先于 dimerCache 使用
+    private static final java.util.concurrent.ConcurrentHashMap<String, double[]> mfeCache =
+            new java.util.concurrent.ConcurrentHashMap<String, double[]>();
 
     /**
      * 配对二聚体评估（按需调用，平时不运行）：
@@ -175,10 +182,13 @@ public class PrimerStore {
      * 序列没变时 dimerCache 命中，第二次起毫秒级。
      */
     public static void evaluatePairs() {
+        java.util.Map<Primer, java.util.List<HeteroHit>> acc =
+                new java.util.LinkedHashMap<Primer, java.util.List<HeteroHit>>();
         for (Primer p : primers) {
             p.heteroDG = 0;
             p.max3pComp = 0;
             p.dimerReason = "";
+            acc.put(p, new java.util.ArrayList<HeteroHit>());
         }
         for (int i = 0; i < primers.size(); i++) {
             Primer a = primers.get(i);
@@ -186,30 +196,100 @@ public class PrimerStore {
             for (int j = i + 1; j < primers.size(); j++) {
                 Primer b = primers.get(j);
                 if (b.seq == null || b.seq.length() < 4) continue;
-                boolean paired = a.ampliconId != null && a.ampliconId.equals(b.ampliconId);
-                boolean cross = !paired && a.chr.equals(b.chr);
-                if (!paired && !cross) continue;
-                String key = a.seq + "\u0001" + b.seq;
-                double[] res = dimerCache.get(key);
-                if (res == null) {
-                    res = new double[]{PrimerMetrics.dimerDG(a.seq, b.seq),
-                            PrimerMetrics.max3pComplement(a.seq, b.seq)};
-                    if (dimerCache.size() > 200000) dimerCache.clear();   // 防止序列反复编辑时无限膨胀
-                    dimerCache.put(key, res);
-                }
+                // v0.1.39：多重 PCR —— 异源二聚体对【全体系所有引物】计算，不限于配对/同染色体
+                double[] res = heteroPairDG(a.seq, b.seq);
                 int c3 = (int) res[1];
                 a.heteroDG = Math.min(a.heteroDG, res[0]);
                 a.max3pComp = Math.max(a.max3pComp, c3);
                 b.heteroDG = Math.min(b.heteroDG, res[0]);
                 b.max3pComp = Math.max(b.max3pComp, c3);
+                acc.get(a).add(new HeteroHit(b.name, res[0], c3));
+                acc.get(b).add(new HeteroHit(a.name, res[0], c3));
                 if (c3 >= failHetero3pTh || res[0] <= failHeteroDgTh) {
                     a.dimerReason = "二聚体(3'comp=" + c3 + ")";
                     b.dimerReason = "二聚体(3'comp=" + c3 + ")";
                 }
             }
         }
+        // 每引物取 Top-5 最危险（ΔG 最负优先）
         for (Primer p : primers) {
+            java.util.List<HeteroHit> lst = acc.get(p);
+            java.util.Collections.sort(lst, new java.util.Comparator<HeteroHit>() {
+                public int compare(HeteroHit x, HeteroHit y) { return Double.compare(x.dg, y.dg); }
+            });
+            p.topHetero = lst.size() <= 5 ? lst
+                    : new java.util.ArrayList<HeteroHit>(lst.subList(0, 5));
             p.pass = p.failReasons.isEmpty() && p.dimerReason.isEmpty();
+        }
+    }
+
+    /** 取一对引物序列的异源二聚体 [ΔG, 3'comp]：优先 mfe 缓存 → 内置缓存 → 实时算并缓存 */
+    private static double[] heteroPairDG(String a, String b) {
+        String key = a + "\u0001" + b;
+        double[] r = mfeCache.get(key);
+        if (r != null) return r;
+        r = dimerCache.get(key);
+        if (r != null) return r;
+        r = new double[]{PrimerMetrics.dimerDG(a, b), PrimerMetrics.max3pComplement(a, b)};
+        if (dimerCache.size() > 200000) dimerCache.clear();   // 防止序列反复编辑时无限膨胀
+        dimerCache.put(key, r);
+        return r;
+    }
+
+    /**
+     * 若配置了 MFEprimer exe，运行 dimer 计算全体系二聚体 ΔG/3'comp 存入 mfeCache（key=seqA\u0001seqB）。
+     * 失败（路径无效 / 进程异常 / 超时）则清空 mfeCache，之后 heteroPairDG 自动回退内置估算。
+     * 默认不配置 → 直接返回（mfeCache 空），完全不影响内置路径。
+     */
+    public static void updateMfeCache() { updateMfeCache(getPrimers()); }
+    public static void updateMfeCache(java.util.List<Primer> all) {
+        mfeCache.clear();
+        if (mfeExePath == null || mfeExePath.trim().isEmpty()) return;
+        java.io.File exe = new java.io.File(mfeExePath.trim());
+        if (!exe.exists() || !exe.isFile()) return;
+        java.io.File fa = null, out = null;
+        try {
+            fa = java.io.File.createTempFile("mfe_in_", ".fasta");
+            out = java.io.File.createTempFile("mfe_out_", ".txt");
+            java.util.Map<String, String> seqOf = new java.util.LinkedHashMap<String, String>();
+            StringBuilder sb = new StringBuilder();
+            int idx = 0;
+            for (Primer p : all) {
+                if (p.seq == null || p.seq.length() < 4) continue;
+                String id = "P" + (idx++);
+                seqOf.put(id, p.seq);
+                sb.append(">").append(id).append("\n").append(p.seq).append("\n");
+            }
+            if (seqOf.isEmpty()) return;
+            java.nio.file.Files.write(fa.toPath(), sb.toString().getBytes("UTF-8"));
+            ProcessBuilder pb = new ProcessBuilder(exe.getAbsolutePath(), "dimer",
+                    "-i", fa.getAbsolutePath(), "-o", out.getAbsolutePath(), "-p");
+            pb.redirectErrorStream(true);
+            Process pr = pb.start();
+            pr.waitFor(120, java.util.concurrent.TimeUnit.SECONDS);
+            String txt = new String(java.nio.file.Files.readAllBytes(out.toPath()), "UTF-8");
+            java.util.regex.Pattern dimerPat = java.util.regex.Pattern
+                    .compile("Dimer\\s+\\d+:\\s*(\\S+)\\s+x\\s+(\\S+)");
+            java.util.regex.Pattern dgPat = java.util.regex.Pattern
+                    .compile("Delta G\\s*=\\s*(-?[\\d.]+)");
+            java.util.regex.Matcher dm = dimerPat.matcher(txt);
+            while (dm.find()) {
+                String na = dm.group(1), nb = dm.group(2);
+                String sa = seqOf.get(na), sb2 = seqOf.get(nb);
+                if (sa == null || sb2 == null) continue;
+                int from = dm.end();
+                java.util.regex.Matcher gm = dgPat.matcher(txt);
+                double dg = 0;
+                if (gm.find(from)) dg = Double.parseDouble(gm.group(1));
+                double c3 = PrimerMetrics.max3pComplement(sa, sb2);   // 3'comp 用内置快速算，ΔG 用 MFEprimer
+                mfeCache.put(sa + "\u0001" + sb2, new double[]{dg, c3});
+            }
+        } catch (Exception ex) {
+            System.err.println("[MFEprimer] dimer 计算失败，退回内置估算: " + ex);
+            mfeCache.clear();
+        } finally {
+            if (fa != null) fa.delete();
+            if (out != null) out.delete();
         }
     }
 
@@ -235,7 +315,9 @@ public class PrimerStore {
         p.heteroDG = 0;
         p.max3pComp = 0;
         p.dimerReason = "";
+        java.util.List<HeteroHit> lst = new java.util.ArrayList<HeteroHit>();
         if (p.seq == null || p.seq.length() < 4) {
+            p.topHetero = lst;
             if (p.failReasons == null) p.failReasons = "";
             p.pass = p.failReasons.isEmpty();
             return;
@@ -243,24 +325,21 @@ public class PrimerStore {
         for (Primer q : primers) {
             if (q == p) continue;
             if (q.seq == null || q.seq.length() < 4) continue;
-            boolean paired = p.ampliconId != null && p.ampliconId.equals(q.ampliconId);
-            boolean cross = !paired && p.chr != null && p.chr.equals(q.chr);
-            if (!paired && !cross) continue;
-            String key = p.seq + "\u0001" + q.seq;
-            double[] res = dimerCache.get(key);
-            if (res == null) {
-                res = new double[]{PrimerMetrics.dimerDG(p.seq, q.seq),
-                        PrimerMetrics.max3pComplement(p.seq, q.seq)};
-                if (dimerCache.size() > 200000) dimerCache.clear();
-                dimerCache.put(key, res);
-            }
+            // v0.1.39：多重 PCR —— 与【全体系所有其他引物】计算异源二聚体，不限于配对/同染色体
+            double[] res = heteroPairDG(p.seq, q.seq);
             int c3 = (int) res[1];
             p.heteroDG = Math.min(p.heteroDG, res[0]);
             p.max3pComp = Math.max(p.max3pComp, c3);
+            lst.add(new HeteroHit(q.name, res[0], c3));
             if (c3 >= failHetero3pTh || res[0] <= failHeteroDgTh) {
                 p.dimerReason = "二聚体(3'comp=" + c3 + ")";
             }
         }
+        java.util.Collections.sort(lst, new java.util.Comparator<HeteroHit>() {
+            public int compare(HeteroHit x, HeteroHit y) { return Double.compare(x.dg, y.dg); }
+        });
+        p.topHetero = lst.size() <= 5 ? lst
+                : new java.util.ArrayList<HeteroHit>(lst.subList(0, 5));
         if (p.failReasons == null) p.failReasons = "";
         p.pass = p.failReasons.isEmpty() && p.dimerReason.isEmpty();
     }
@@ -739,6 +818,7 @@ public class PrimerStore {
             props.setProperty("fail.selfTh", String.valueOf(failSelfTh));
             props.setProperty("fail.hetero3pTh", String.valueOf(failHetero3pTh));
             props.setProperty("fail.heteroDgTh", String.valueOf(failHeteroDgTh));
+            props.setProperty("mfe.exePath", mfeExePath == null ? "" : mfeExePath);
             props.store(new FileWriter(f), "IGV primer designer defaults");
         } catch (Exception ignore) {
         }
@@ -767,6 +847,7 @@ public class PrimerStore {
             if (props.containsKey("fail.selfTh")) failSelfTh = Double.parseDouble(props.getProperty("fail.selfTh"));
             if (props.containsKey("fail.hetero3pTh")) failHetero3pTh = Integer.parseInt(props.getProperty("fail.hetero3pTh"));
             if (props.containsKey("fail.heteroDgTh")) failHeteroDgTh = Double.parseDouble(props.getProperty("fail.heteroDgTh"));
+            if (props.containsKey("mfe.exePath")) mfeExePath = props.getProperty("mfe.exePath");
         } catch (Exception ignore) {
         }
     }
