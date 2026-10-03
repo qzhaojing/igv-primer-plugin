@@ -36,6 +36,8 @@ public class PrimerPlugin implements IGVPlugin {
         if (inited) return;
         inited = true;
         try {
+            // v0.1.42：把引物接入 IGV 顶栏搜索框（官方扩展点），输入引物名/基因名/分组名可跳转
+            PrimerSearcher.register();
             // 启动即创建手动添加轨（group=null），右键即可用；无引物时渲染为空
             PrimerTrack manual = new PrimerTrack();   // 默认手动添加轨
             IGV.getInstance().addTracks(Collections.singletonList(manual), PanelName.DATA_PANEL);
