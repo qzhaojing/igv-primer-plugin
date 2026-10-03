@@ -409,8 +409,7 @@ public class PrimerStore {
     public static synchronized void duplicate(Primer src) {
         if (src == null) return;
         Primer c = src.copy();
-        c.ampliconId = null;   // 复制体独立，不污染原配对组连线
-        c.pairWith = null;
+        c.pairedWith = new java.util.LinkedHashSet<String>();   // 复制体独立，不污染原连线
         c.name = uniqueIncrementedName(src.name);
         Integer r = PrimerTrack.allScreenRows().get(src);
         c.rowOverride = (r == null) ? null : (r + 1);   // 紧贴原引物下方一行
@@ -431,39 +430,23 @@ public class PrimerStore {
         return false;
     }
 
-    /** 按名称配对：p.pairWith 或 某引物的 pairWith 指向 p.name → 共享 ampliconId（即连线 + 算异源二聚体） */
+    /** 按名称回链配对（导入/新增后调用）：遍历 p.pairedWith 里记录的伙伴名，确保双方在集合中互相引用（边对称）。 */
     public static synchronized void linkByName(Primer p) {
-        for (Primer q : primers) {
-            if (q == p) continue;
-            boolean match = (p.pairWith != null && p.pairWith.equals(q.name))
-                    || (q.pairWith != null && q.pairWith.equals(p.name));
-            if (match) {
-                Primer f = p.strand == '+' ? p : q;
-                Primer r = p.strand == '+' ? q : p;
-                if (!canFormProduct(f, r)) continue;   // 不能形成 PCR 产物则不自动连
-                String aid = (p.ampliconId != null) ? p.ampliconId
-                        : (q.ampliconId != null ? q.ampliconId : nextAmplicon());
-                p.ampliconId = aid;
-                q.ampliconId = aid;
+        if (p.pairedWith == null || p.pairedWith.isEmpty()) return;
+        for (String nm : new java.util.ArrayList<String>(p.pairedWith)) {
+            for (Primer q : primers) {
+                if (q != p && nm.equals(q.name)) {
+                    if (q.pairedWith == null) q.pairedWith = new java.util.LinkedHashSet<String>();
+                    q.pairedWith.add(p.name);   // 保证边对称
+                }
             }
         }
     }
 
-    /** 按名称列表配对：p + 所有同名引物共享一个配对组 ID（支持一条引物配多条，即 1:N）。
-     *  优先并入任一伙伴已有的组（复用其 ID）；若伙伴均无组，则复用 p 的组 ID 或生成新组。
-     *  v0.1.4：只接受与 p 异链（F/R 相对）的伙伴，同链引物直接跳过（避免出现不严谨的同链"配对"）。 */
+    /** 按名称列表配对（编辑框保存 / 新建时调用）：p 与每个异链且能形成 PCR 产物的同名引物各加一条独立边（1:N 自然支持）。 */
     public static synchronized void linkByNames(Primer p, String[] names) {
-        String gid = null;
-        for (String nm : names) {
-            nm = nm.trim();
-            if (nm.isEmpty()) continue;
-            for (Primer q : primers) {
-                if (nm.equals(q.name) && q.ampliconId != null) { gid = q.ampliconId; break; }
-            }
-            if (gid != null) break;
-        }
-        if (gid == null) gid = (p.ampliconId != null) ? p.ampliconId : nextAmplicon();
-        p.ampliconId = gid;
+        if (p.pairedWith == null) p.pairedWith = new java.util.LinkedHashSet<String>();
+        else p.pairedWith.clear();
         for (String nm : names) {
             nm = nm.trim();
             if (nm.isEmpty()) continue;
@@ -471,138 +454,91 @@ public class PrimerStore {
                 if (q != p && nm.equals(q.name) && q.strand != p.strand) {
                     Primer f = p.strand == '+' ? p : q;
                     Primer r = p.strand == '+' ? q : p;
-                    if (canFormProduct(f, r)) q.ampliconId = gid;  // 仅当能形成 PCR 产物才连
+                    if (canFormProduct(f, r)) addEdge(p, q);   // 仅当能形成 PCR 产物才连
                 }
             }
         }
     }
 
     /**
-     * 返回编辑框「配对引物名称」预填值：仅显示与本引物直接相连的对端名称（p.pairWith），
-     * 不再列出同扩增子组内的全部成员。v0.1.27：多条引物同组时只填"本引物这道连线的另一端"，
-     * 避免字段被整组名塞满。兜底：无 pairWith 但仍身处配对组时取同组任一其他成员名，
-     * 防止编辑保存时因字段为空而误删整组连线。
+     * 返回编辑框「配对引物名称」预填值：列出与本引物直接相连的所有对端名称（pairedWith 边集合），
+     * 逗号分隔。一条引物可同时连多条（1 对多），全部列出；无配对返回空串。
      */
     public static synchronized String groupPartnerNames(Primer p) {
-        if (p.pairWith != null) return p.pairWith;
-        if (p.ampliconId == null) return "";
-        for (Primer q : primers) {
-            if (q != p && p.ampliconId.equals(q.ampliconId)) return q.name;
-        }
-        return "";
+        if (p.pairedWith == null || p.pairedWith.isEmpty()) return "";
+        return String.join(", ", p.pairedWith);
     }
 
-    // ---------- Ctrl+点击 快捷配对（v0.1.2） ----------
+    // ---------- 配对（边模型，v0.1.41） ----------
+    // 每条 F-R 连线是独立的「边」，存于两端 Primer.pairedWith 集合。一个引物可同时持有多条边（1 对多），
+    // 增/删只作用于单条边，不影响该引物的其他边。布局按边的连通分量同排；渲染逐边画线。
 
     /** 判断 f(+)/r(-) 能否形成 PCR 产物：要求 R.end - F.start > 0。 */
     private static boolean canFormProduct(Primer f, Primer r) {
         return (r.end - f.start) > 0;
     }
 
-    /**
-     * 把 a 与 b 直接连成一对（Ctrl+点击）：
-     *  - 双方各自的既有配对先解除（保证一对一，避免出现串线的大组）；
-     *  - 分配新 ampliconId，双向写 pairWith（随 BED 导出/导入复原）。
-     */
-    public static synchronized void pairPrimer(Primer a, Primer b) {
-        if (a == null || b == null || a == b) return;
-        // v0.1.4：只允许 F(+) 与 R(-) 异链配对，同链拒绝（弹窗提示，不做任何改动）
-        if (a.strand == b.strand) {
-            String tag = a.strand == '+' ? "F(+)" : "R(-)";
-            javax.swing.JOptionPane.showMessageDialog(
-                    org.broad.igv.ui.IGV.getMainFrame(),
-                    "配对失败：" + a.name + " 与 " + b.name + " 同为 " + tag + " 链。\n"
-                            + "只允许 F(+) 与 R(-) 异链配对，请一条选正向引物、一条选反向引物。",
-                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        Primer f = a.strand == '+' ? a : b;
-        Primer r = a.strand == '+' ? b : a;
-        if (!canFormProduct(f, r)) {
-            javax.swing.JOptionPane.showMessageDialog(
-                    org.broad.igv.ui.IGV.getMainFrame(),
-                    "配对失败：" + f.name + "(F) 与 " + r.name + "(R) 之间无法形成 PCR 产物\n"
-                            + "（要求 R.end - F.start > 0，当前 = " + (r.end - f.start) + "）。\n"
-                            + "请确认正向引物位于反向引物上游。",
-                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        unpairAll(a);
-        unpairAll(b);
-        String aid = nextAmplicon();
-        a.ampliconId = aid;
-        b.ampliconId = aid;
-        a.pairWith = b.name;
-        b.pairWith = a.name;
-        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记（按需评估才重算，不跑 O(n²)）
-        refresh();
-        autosave(true);
+    /** 两引物之间是否已存在一条连线（边）。 */
+    public static boolean isPaired(Primer a, Primer b) {
+        return a.pairedWith != null && a.pairedWith.contains(b.name);
     }
 
-    /**
-     * 取消 a 与 b 之间的配对（Ctrl+Shift+点击）：
-     *  - 两者不同组或均未配对 → 静默忽略，不报错；
-     *  - 同组 size==2 → 双方都散组；size>2 → a、b 移出，其余成员保留原组。
-     */
-    public static synchronized void unpairPrimer(Primer a, Primer b) {
-        if (a == null || b == null || a == b) return;
-        if (a.ampliconId == null || !a.ampliconId.equals(b.ampliconId)) return; // 无配对：忽略
-        List<Primer> members = new ArrayList<Primer>();
-        for (Primer q : primers) if (a.ampliconId.equals(q.ampliconId)) members.add(q);
-        clearPair(a);
-        clearPair(b);
-        if (members.size() - 2 < 2) {
-            for (Primer q : members) clearPair(q);   // 剩余不足 2 条 → 整组散开
-        }
-        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
-        refresh();
-        autosave(true);
+    /** 加一条边（双向、对称）。调用方需先校验异链 + 可形成 PCR 产物。 */
+    private static void addEdge(Primer a, Primer b) {
+        if (a.pairedWith == null) a.pairedWith = new java.util.LinkedHashSet<String>();
+        if (b.pairedWith == null) b.pairedWith = new java.util.LinkedHashSet<String>();
+        a.pairedWith.add(b.name);
+        b.pairedWith.add(a.name);
     }
 
-    /** 解除 p 参与的所有配对：同组其他成员全部散组，双向清 pairWith。 */
-    private static void unpairAll(Primer p) {
-        if (p.ampliconId != null) {
+    /** 删一条边（双向、对称）。无此边则静默。 */
+    private static void removeEdge(Primer a, Primer b) {
+        if (a.pairedWith != null) a.pairedWith.remove(b.name);
+        if (b.pairedWith != null) b.pairedWith.remove(a.name);
+    }
+
+    /** 解除 p 参与的全部边（清 p 的 pairedWith，并清各伙伴指向 p 的引用）。 */
+    private static void removeAllEdges(Primer p) {
+        if (p.pairedWith == null) return;
+        java.util.List<String> partners = new java.util.ArrayList<String>(p.pairedWith);
+        p.pairedWith.clear();
+        for (String nm : partners) {
             for (Primer q : primers) {
-                if (q != p && p.ampliconId.equals(q.ampliconId)) clearPair(q);
+                if (nm.equals(q.name) && q.pairedWith != null) q.pairedWith.remove(p.name);
             }
         }
-        clearPair(p);
+    }
+
+    private static void clearEdges(Primer p) {
+        if (p.pairedWith != null) p.pairedWith.clear();
     }
 
     /**
-     * v0.1.11：Ctrl+点击 增量配对（支持 1对多）：把 b 并入 a 所在配对组，不清除既有成员。
-     *  - 仅允许 F(+)/R(-) 异链，同链拒绝并提示；
-     *  - 若 a、b 各自已有不同配对组，则合并为同一组（实现 1v多 / 多v多 汇聚）；
-     *  - 双向写 pairWith（随 BED 导出/导入复原）。
+     * Ctrl+点击 切换 a 与 b 之间的一条边（v0.1.41 边模型）：
+     *  - 已连 → 只删 a-b 这一条边，不影响 a 或 b 的其他边；
+     *  - 未连 → 校验异链 + 可形成 PCR 产物后，仅加 a-b 这一条边（天然支持 1 对多：R1 可同时连 F1/F2/F3）。
+     *  同链拒绝（弹窗提示）。
      */
-    public static synchronized void mergePair(Primer a, Primer b) {
+    public static synchronized void toggleEdge(Primer a, Primer b) {
         if (a == null || b == null || a == b) return;
-        if (a.strand == b.strand) { warnSameStrand(a, b); return; }
-        Primer f = a.strand == '+' ? a : b;
-        Primer r = a.strand == '+' ? b : a;
-        if (!canFormProduct(f, r)) {
-            javax.swing.JOptionPane.showMessageDialog(
-                    org.broad.igv.ui.IGV.getMainFrame(),
-                    "配对失败：" + f.name + "(F) 与 " + r.name + "(R) 之间无法形成 PCR 产物\n"
-                            + "（要求 R.end - F.start > 0，当前 = " + (r.end - f.start) + "）。\n"
-                            + "请确认正向引物位于反向引物上游。",
-                    "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
-            return;
-        }
-        String gid;
-        if (a.ampliconId != null && b.ampliconId != null && !a.ampliconId.equals(b.ampliconId)) {
-            String target = a.ampliconId;            // 合并 b 的组进 a 的组
-            for (Primer q : primers) if (b.ampliconId.equals(q.ampliconId)) q.ampliconId = target;
-            gid = target;
+        if (isPaired(a, b)) {
+            removeEdge(a, b);
         } else {
-            gid = (a.ampliconId != null) ? a.ampliconId
-                    : (b.ampliconId != null ? b.ampliconId : nextAmplicon());
+            if (a.strand == b.strand) { warnSameStrand(a, b); return; }
+            Primer f = a.strand == '+' ? a : b;
+            Primer r = a.strand == '+' ? b : a;
+            if (!canFormProduct(f, r)) {
+                javax.swing.JOptionPane.showMessageDialog(
+                        org.broad.igv.ui.IGV.getMainFrame(),
+                        "配对失败：" + f.name + "(F) 与 " + r.name + "(R) 之间无法形成 PCR 产物\n"
+                                + "（要求 R.end - F.start > 0，当前 = " + (r.end - f.start) + "）。\n"
+                                + "请确认正向引物位于反向引物上游。",
+                        "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
+                return;
+            }
+            addEdge(a, b);
         }
-        a.ampliconId = gid;
-        b.ampliconId = gid;
-        a.pairWith = b.name;
-        b.pairWith = a.name;
-        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
+        resetDimerFlags();
         refresh();
         autosave(true);
     }
@@ -616,65 +552,43 @@ public class PrimerStore {
                 "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
     }
 
-    /** v0.1.7：解除 p 的全部配对（同组成员同时散组，双向清 pairWith）；无配对静默返回。
-     *  语义：删除其中一条的配对，另一条与它的配对必须同时清除。 */
-    public static synchronized void unpairAllFor(Primer p) {
-        if (p == null) return;
-        if (p.ampliconId == null) return;   // 无配对：静默忽略
-        unpairAll(p);
-        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
-        refresh();
-        autosave(true);
-    }
-
-    /** v0.1.9：把 p 从当前配对组中摘出（清 p 的 ampliconId/pairWith）；
-     *  若原组剩余不足 2 条，剩余成员一并散组。用于编辑框重设配对前先脱离旧组。 */
-    public static synchronized void detach(Primer p) {
-        if (p == null || p.ampliconId == null) return;
-        List<Primer> rest = new ArrayList<Primer>();
-        for (Primer q : primers) {
-            if (q != p && p.ampliconId.equals(q.ampliconId)) rest.add(q);
-        }
-        clearPair(p);
-        if (rest.size() < 2) {
-            for (Primer q : rest) clearPair(q);
-        }
-    }
-
-    /**
-     * v0.1.18：右键「取消该引物配对」——只把该引物移出其配对组、断开与之相关的所有连线，
-     *  同组其余成员之间的连线（若仍 >=2 条）保留，不被一并散开。
-     *  与 unpairAllFor（整组散开）的区别：仅影响该引物的连线，不波及其他成员间关系。
-     *  未配对引物静默忽略；跨线程调用安全（经由线程安全的 refresh）。
-     */
+    /** 右键「取消该引物配对」/编辑框重设前脱离：解除该引物参与的全部边（不影响其他引物之间的边）。 */
     public static synchronized void unpairForSelected(Primer p) {
-        if (p == null || p.ampliconId == null) return;   // 未配对：静默忽略
-        String gid = p.ampliconId;
-        List<Primer> rest = new ArrayList<Primer>();
-        for (Primer q : primers) {
-            if (q != p && gid.equals(q.ampliconId)) rest.add(q);
-        }
-        clearPair(p);                                    // 清该引物自身配对
-        for (Primer q : rest) {                          // 清伙伴指向该引物的 pairWith，避免悬空指针
-            if (p.name.equals(q.pairWith)) q.pairWith = null;
-        }
-        if (rest.size() < 2) {                           // 其余不足 2 条 → 整组散开
-            for (Primer q : rest) clearPair(q);
-        }
-        resetDimerFlags();   // 配对结构变化：清陈旧二聚体标记
+        if (p == null || p.pairedWith == null || p.pairedWith.isEmpty()) return;   // 未配对：静默忽略
+        removeAllEdges(p);
+        resetDimerFlags();
         refresh();
         autosave(true);
     }
 
-    private static void clearPair(Primer p) {
-        p.ampliconId = null;
-        p.pairWith = null;
+    /** 解除 p 的全部配对（与 unpairForSelected 语义一致：仅清 p 参与的边）。保留别名便于调用方。 */
+    public static synchronized void unpairAllFor(Primer p) {
+        unpairForSelected(p);
+    }
+
+    /** 编辑框保存前：让 p 脱离所有旧连线，随后由 linkByNames 重建新边。 */
+    public static synchronized void detach(Primer p) {
+        if (p == null) return;
+        removeAllEdges(p);
+    }
+
+    /** 解除全部配对：清掉所有引物的边，并重算二聚体标记。 */
+    public static synchronized void clearAllPairs() {
+        boolean any = false;
+        for (Primer p : primers) {
+            if (p.pairedWith != null && !p.pairedWith.isEmpty()) any = true;
+            clearEdges(p);
+        }
+        if (!any) return;
+        resetDimerFlags();   // 全部取消配对：清二聚体标记
+        refresh();
+        autosave(true);
     }
 
     // ---------- 批量操作（v0.1.8） ----------
 
     /** 删除全部未通过评估的引物（pass==false，含被二聚体 flag 的）。返回删除条数。
-     *  同时清理被删引物遗留的孤立配对（残留 ampliconId/pairWith），避免悬空连线。
+     *  同时清理被删引物遗留的孤立配对（残留边），避免悬空连线。
      *  注意：无撤销机制，调用方应在 UI 层先 confirm。 */
     public static synchronized int removeFailed() {
         int cnt = 0;
@@ -691,20 +605,6 @@ public class PrimerStore {
         refresh();
         autosave(true);
         return cnt;
-    }
-
-    /** 解除全部配对：所有引物 ampliconId/pairWith 置空，并重算二聚体标记。 */
-    public static synchronized void clearAllPairs() {
-        boolean any = false;
-        for (Primer p : primers) {
-            if (p.ampliconId != null || p.pairWith != null) any = true;
-            p.ampliconId = null;
-            p.pairWith = null;
-        }
-        if (!any) return;
-        resetDimerFlags();   // 全部取消配对：清二聚体标记
-        refresh();
-        autosave(true);
     }
 
     /** 批量设置全部引物的测序读段长度 readLen（nt）。readLen>0 才生效；会改变 readRegion→布局/连线。 */
@@ -756,19 +656,15 @@ public class PrimerStore {
         autosave(true);
     }
 
-    /** 清理孤立配对：组内仅剩 1 条成员的 ampliconId 失去意义，清掉其 ampliconId/pairWith。 */
+    /** 清理孤立配对：去掉指向已删引物（名称无对应 Primer）的悬空边，保证每条边两端都存在。 */
     private static void cleanOrphanPairs() {
-        java.util.Map<String, Integer> counts = new java.util.HashMap<String, Integer>();
+        java.util.Set<String> names = new java.util.HashSet<String>();
+        for (Primer p : primers) names.add(p.name);
         for (Primer p : primers) {
-            if (p.ampliconId != null) {
-                counts.put(p.ampliconId, counts.getOrDefault(p.ampliconId, 0) + 1);
-            }
-        }
-        for (Primer p : primers) {
-            if (p.ampliconId != null && counts.get(p.ampliconId) < 2) {
-                p.ampliconId = null;
-                p.pairWith = null;
-            }
+            if (p.pairedWith == null) continue;
+            java.util.List<String> bad = new java.util.ArrayList<String>();
+            for (String nm : p.pairedWith) if (!names.contains(nm)) bad.add(nm);
+            for (String nm : bad) p.pairedWith.remove(nm);
         }
     }
 

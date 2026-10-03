@@ -72,29 +72,18 @@ public class ExportUtils {
         writeBED(f, PrimerStore.getPrimers());
     }
 
-    /** 静默写指定引物列表到 BED（按组导出/自动保存复用）。 */
+    /** 静默写指定引物列表到 BED（按组导出/自动保存复用）。边模型：bedName 已内嵌 |p伙伴，直接写即可。 */
     private static synchronized void writeBED(File f, List<Primer> primers) throws Exception {
         BufferedWriter w = new BufferedWriter(new FileWriter(f));
         try {
             w.write("track name=\"Primer Designer\" description=\"primers; thick=primer body; color=strand/fail\" itemRgb=\"On\"");
             w.newLine();
             java.util.Map<Primer, Integer> rows = PrimerTrack.allScreenRows();
-            // v0.1.40：单条成组（组内仅 1 条）的 ampliconId 不写入 BED——无连线意义，纯污染下次导入
-            java.util.Map<String, Integer> grpCnt = new java.util.HashMap<String, Integer>();
-            for (Primer p : primers) {
-                if (p.ampliconId == null) continue;
-                Integer c = grpCnt.get(p.ampliconId);
-                grpCnt.put(p.ampliconId, c == null ? 1 : c + 1);
-            }
             for (Primer p : primers) {
                 // thick 限制在 [start,end] 内（= 引物本体），测序延长区单独展示、不合并进引物长度
                 // v0.1.6：把当前布局行号写死进 name（|r行号），导入/自动保存可原样恢复上下排布
                 Integer row = rows.containsKey(p) ? rows.get(p) : p.rowOverride;
                 String nm = p.bedName(row);
-                Integer gc = grpCnt.get(p.ampliconId);
-                if (p.ampliconId != null && (gc == null || gc < 2)) {
-                    nm = nm.replaceAll("\\|a[^|]*", "");
-                }
                 w.write(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
                         p.chr, p.start, p.end, nm, p.strand, p.start, p.end, p.colorHex()));
                 w.newLine();
@@ -238,11 +227,13 @@ public class ExportUtils {
         }
     }
 
-    /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p配对名 解析为 pairWith（导入后按名回链配对）；|r行号 恢复布局行。 */
+    /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p伙伴 解析为本引物的边（pairedWith）；
+     *  旧格式 |a组 在解析后按 F-R 重建边（见 postProcessLegacyGroups）；|r行号 恢复布局行。 */
     private static int parseBED(File f, String group, List<Primer> out) throws Exception {
         int n = 0;
         BufferedReader r = new BufferedReader(new FileReader(f));
         String line;
+        java.util.List<Primer> legacyGroupMembers = new java.util.ArrayList<Primer>();
         while ((line = r.readLine()) != null) {
             if (line.startsWith("track") || line.startsWith("#") || line.trim().isEmpty()) continue;
             String[] t = line.split("\t");
@@ -251,12 +242,10 @@ public class ExportUtils {
             String role = "R1";
             int readLen = 50;
             String g = group;   // 默认：来源文件名；BED 内嵌 |gXXX 时优先
-            String pairWith = null;
             String color = null;
             int row = -1;       // v0.1.6：|r行号 → rowOverride（布局定死恢复）；-1 = 自动布局
-            int pipe = name.indexOf('|');
             String aId = null;
-            if (pipe > 0) {
+            if (name.indexOf('|') > 0) {
                 String[] parts = name.split("\\|");
                 name = parts[0];
                 for (int i = 1; i < parts.length; i++) {
@@ -270,7 +259,11 @@ public class ExportUtils {
                     } else if (seg.startsWith("c") && seg.length() > 1) {
                         color = seg.substring(1);
                     } else if (seg.startsWith("p") && seg.length() > 1) {
-                        pairWith = seg.substring(1);
+                        // 边模型：|p 后跟若干伙伴名，';' 分隔（v0.1.41+）
+                        for (String nm : seg.substring(1).split(";")) {
+                            nm = nm.trim();
+                            if (!nm.isEmpty()) addEdgeName(out, name, nm);
+                        }
                     } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
                         try { row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) {}
                     }
@@ -282,50 +275,77 @@ public class ExportUtils {
                     role = parts[1];
                 }
             }
-            // v0.1.40：BED 无 |a 标记 → ampliconId 一律 null（此前每次导入都发新 id，
-            // 把历史自动配对时代的共享 id 连同新 id 一起写进 autosave/导出 BED，重载即复活连线）
             Primer p = new Primer(name, t[0], Integer.parseInt(t[1]), Integer.parseInt(t[2]),
-                    "+".equals(t[5]) ? '+' : '-', role, readLen, aId);
+                    "+".equals(t[5]) ? '+' : '-', role, readLen, null);
             p.group = g;
-            p.pairWith = pairWith;
             p.color = color;
             if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
             out.add(p);
             n++;
+            if (aId != null) { p.ampliconId = aId; legacyGroupMembers.add(p); }  // 旧格式：挂到组，稍后重建边
         }
         r.close();
-        sanitizeAmpliconGroups(out);   // v0.1.40：剥离可疑 |a 组（跨染色体 / 跨度>10kb / 单条成组）
+        postProcessLegacyGroups(legacyGroupMembers);   // 旧 |a 组 → F-R 边
+        sanitizeEdges(out);                            // 校验所有边（跨染色体/跨度过大/无法成产物 → 剥离）
         return n;
     }
 
-    /**
-     * v0.1.40：导入侧配对组 sanity 净化（彻底根治历史自动配对污染复活）。
-     *  - 真实 PCR 扩增子组跨度只有几百 bp（实测 0.2~0.5kb），同组跨染色体或总跨度 >10kb
-     *    只可能是旧版自动配对 bug 留下的串组（如 1.4Mb 跨度组）→ 剥离其 ampliconId；
-     *  - 单条成组（|a 组内仅 1 条）无连线意义 → 一并置 null，不再写回文件污染导出。
-     *  用户手动 Ctrl+点击 的正常配对（异链 + R.end-F.start>0 + 跨度小）不受影响。
-     */
-    private static void sanitizeAmpliconGroups(List<Primer> out) {
-        java.util.Map<String, List<Primer>> groups = new java.util.HashMap<String, List<Primer>>();
+    /** 在 out 中找到名为 ownName 的引物，把一个伙伴名 partner 记入其 pairedWith（容错：找不到则忽略）。 */
+    private static void addEdgeName(List<Primer> out, String ownName, String partner) {
         for (Primer p : out) {
-            if (p.ampliconId == null) continue;
-            List<Primer> l = groups.get(p.ampliconId);
-            if (l == null) { l = new ArrayList<Primer>(); groups.put(p.ampliconId, l); }
-            l.add(p);
-        }
-        for (java.util.Map.Entry<String, List<Primer>> e : groups.entrySet()) {
-            List<Primer> ms = e.getValue();
-            if (ms.size() < 2) { ms.get(0).ampliconId = null; continue; }
-            boolean bad = false;
-            int s = Integer.MAX_VALUE, en = Integer.MIN_VALUE;
-            String chr = ms.get(0).chr;
-            for (Primer m : ms) {
-                if (m.chr == null || !m.chr.equals(chr)) { bad = true; break; }
-                s = Math.min(s, m.start);
-                en = Math.max(en, m.end);
+            if (p.name.equals(ownName)) {
+                if (p.pairedWith == null) p.pairedWith = new java.util.LinkedHashSet<String>();
+                p.pairedWith.add(partner);
+                return;
             }
-            if (bad || (en - s) > 10000) {
-                for (Primer m : ms) m.ampliconId = null;
+        }
+    }
+
+    /** 旧格式 |a组：同组内每条 F 与每条 R 各建一条边（仅当能形成 PCR 产物），还原多重 PCR 意图，且不产生 F-F/R-R 错连。 */
+    private static void postProcessLegacyGroups(List<Primer> members) {
+        if (members.isEmpty()) return;
+        java.util.Map<String, List<Primer>> byGroup = new java.util.LinkedHashMap<String, List<Primer>>();
+        for (Primer p : members) {
+            if (p.ampliconId == null) continue;
+            byGroup.computeIfAbsent(p.ampliconId, new java.util.function.Function<String, java.util.List<Primer>>() {
+                public java.util.List<Primer> apply(String k) { return new java.util.ArrayList<Primer>(); }
+            }).add(p);
+        }
+        for (List<Primer> grp : byGroup.values()) {
+            for (Primer f : grp) {
+                if (f.strand != '+') continue;
+                for (Primer r2 : grp) {
+                    if (r2.strand != '-') continue;
+                    if ((r2.end - f.start) > 0) addEdgeName(grp, f.name, r2.name);
+                }
+            }
+        }
+        for (Primer p : members) p.ampliconId = null;   // 标记用毕即清
+    }
+
+    /**
+     * 导入侧边 sanity 净化：真实 PCR 边跨度只有几百 bp（实测 0.2~0.5kb），若一条边跨染色体或
+     * 总跨度 >10kb（只可能是旧版自动配对 bug 留下的串组）→ 剥离该边。互反边一并清理。
+     * 正常的手动配对（异链 + R.end-F.start>0 + 跨度小）不受影响。
+     */
+    private static void sanitizeEdges(List<Primer> out) {
+        java.util.Map<String, Primer> byName = new java.util.HashMap<String, Primer>();
+        for (Primer p : out) byName.put(p.name, p);
+        for (Primer p : out) {
+            if (p.pairedWith == null) continue;
+            java.util.List<String> bad = new java.util.ArrayList<String>();
+            for (String nm : p.pairedWith) {
+                Primer q = byName.get(nm);
+                if (q == null) { bad.add(nm); continue; }                      // 悬空伙伴
+                if (!p.chr.equals(q.chr)) { bad.add(nm); continue; }           // 跨染色体
+                int lo = Math.min(p.start, q.start), hi = Math.max(p.end, q.end);
+                if ((hi - lo) > 10000) { bad.add(nm); continue; }              // 跨度过大（串组）
+                if (!((Math.max(p.end, q.end) - Math.min(p.start, q.start)) > 0)) bad.add(nm); // 无法成产物
+            }
+            for (String nm : bad) {
+                p.pairedWith.remove(nm);
+                Primer q = byName.get(nm);
+                if (q != null && q.pairedWith != null) q.pairedWith.remove(p.name);  // 互反清理
             }
         }
     }

@@ -95,25 +95,31 @@ public class PrimerTrack extends AbstractTrack {
         int needH = Math.max(60, TOOLBAR_H + nRows * ROW_H + 14);
         if (getHeight() != needH) setHeight(needH);
 
-        // 1) 配对连线：size==2 同排水平线；size>2 hub-spoke 放射线（不同色区分每条配对）
-        java.util.Set<String> drawnGroups = new java.util.HashSet<String>();
+        // 1) 配对连线（边模型 v0.1.41）：每条 F-R 边独立画一条曲线，不再按组画完全图。
+        //    支持一引物多连（如 R1 同时连 F1/F2/F3 = 三条独立曲线），也绝不会出现 F-F / R-R 错误连线。
+        java.util.Map<String, Primer> nameMap = new java.util.HashMap<String, Primer>();
+        for (Primer p : vis) nameMap.put(p.name, p);
+        java.util.Set<String> drawnEdges = new java.util.HashSet<String>();
         for (Primer p : vis) {
-            if (p.ampliconId == null || drawnGroups.contains(p.ampliconId)) continue;
-            java.util.List<Primer> grp = new java.util.ArrayList<Primer>();
-            for (Primer q : vis) if (p.ampliconId.equals(q.ampliconId)) grp.add(q);
-            if (grp.size() < 2) continue;
-            drawnGroups.add(p.ampliconId);
-            boolean sel = PrimerStore.selected != null
-                    && p.ampliconId.equals(PrimerStore.selected.ampliconId);
-            if (grp.size() == 2) {
-                Primer a = grp.get(0), b = grp.get(1);
+            if (p.pairedWith == null) continue;
+            for (String nm : p.pairedWith) {
+                Primer q = nameMap.get(nm);
+                if (q == null) continue;
+                // 每对只画一次：按名称序去重
+                String key = p.name.compareTo(q.name) < 0 ? (p.name + "\u0000" + q.name)
+                        : (q.name + "\u0000" + p.name);
+                if (!drawnEdges.add(key)) continue;
+                boolean sel = PrimerStore.selected != null
+                        && (PrimerStore.selected == p || PrimerStore.selected == q);
+                Primer a = p.start <= q.start ? p : q;
+                Primer b = p.start <= q.start ? q : p;
                 int lo = Math.min(a.start, b.start), hi = Math.max(a.end, b.end);
                 int x1 = ctx.bpToScreenPixel(lo), x2 = ctx.bpToScreenPixel(hi);
                 int ya = rowY(rect, rows.get(a)) + ARROW_H / 2;
                 int yb = rowY(rect, rows.get(b)) + ARROW_H / 2;
-                g.setColor(sel ? new Color(80, 80, 80) : new Color(150, 150, 150));
+                g.setColor(sel ? new Color(40, 90, 200) : new Color(150, 150, 150));
                 if (sel) g.setStroke(new BasicStroke(2f));
-                // v0.1.10：恢复二次贝塞尔拱形连线（与多对一汇聚风格一致），控制点在两锚点中点上方拱起
+                // 二次贝塞尔拱形连线，控制点在两锚点中点上方拱起
                 int cx = (x1 + x2) / 2;
                 int cy = Math.min(ya, yb) - Math.max(14, Math.abs(ya - yb) / 3);
                 g.draw(new java.awt.geom.QuadCurve2D.Float(x1, ya, cx, cy, x2, yb));
@@ -126,7 +132,6 @@ public class PrimerTrack extends AbstractTrack {
                 int len = hi - lo;
                 g.setColor(Color.DARK_GRAY);
                 g.setFont(g.getFont().deriveFont(11f));
-                // v0.1.26：长度标签置于曲线中点(t=0.5)下方 5px——多条连线时各中点沿曲线天然错开，不拥挤
                 String lenTxt = formatLen(len);
                 java.awt.FontMetrics fm = g.getFontMetrics(g.getFont());
                 double mx2 = 0.25 * x1 + 0.5 * cx + 0.25 * x2;
@@ -134,49 +139,6 @@ public class PrimerTrack extends AbstractTrack {
                 g.drawString(lenTxt, (int) (mx2 - fm.stringWidth(lenTxt) / 2),
                         (int) (my2) + fm.getAscent() + 5);
                 g.setFont(g.getFont().deriveFont(10f));
-            } else {
-                // v8 曲线汇聚：hub = R2 角色（没有则取居中成员）；其余成员用二次贝塞尔曲线平滑汇聚到 hub
-                java.util.List<Primer> sorted = new java.util.ArrayList<Primer>(grp);
-                java.util.Collections.sort(sorted, new java.util.Comparator<Primer>() {
-                    public int compare(Primer x, Primer y) { return x.start - y.start; }
-                });
-                Primer hub = null;
-                for (Primer m : sorted) if ("R2".equals(m.role)) { hub = m; break; }
-                if (hub == null) hub = sorted.get(sorted.size() / 2);
-                int xHub = (ctx.bpToScreenPixel(hub.start) + ctx.bpToScreenPixel(hub.end)) / 2;
-                int yHub = rowY(rect, rows.get(hub)) + ARROW_H / 2;
-                int idx = 0;
-                for (Primer s : grp) {
-                    if (s == hub) continue;
-                    Color c = SPOKE_COLORS[idx % SPOKE_COLORS.length];
-                    int xS = (ctx.bpToScreenPixel(s.start) + ctx.bpToScreenPixel(s.end)) / 2;
-                    int yS = rowY(rect, rows.get(s)) + ARROW_H / 2;
-                    // 二次贝塞尔曲线：控制点取两锚点中点并向上/外拱起，形成平滑汇聚弧
-                    int cx = (xS + xHub) / 2;
-                    int cy = Math.min(yS, yHub) - Math.max(14, Math.abs(yS - yHub) / 3);
-                    g.setColor(c);
-                    g.setStroke(new BasicStroke(sel ? 2.5f : 1.4f));
-                    g.draw(new java.awt.geom.QuadCurve2D.Float(xS, yS, cx, cy, xHub, yHub));
-                    g.setStroke(new BasicStroke(1f));
-                    // v0.1.15：每条 spoke 标注 PCR 产物长度，放大并移到曲线下方，水平居中
-                    int len = Math.max(s.end, hub.end) - Math.min(s.start, hub.start);
-                    g.setFont(g.getFont().deriveFont(11f));
-                    g.setColor(c.darker());
-                    String slen = formatLen(len);
-                    // v0.1.26：同 size==2，标签置于曲线中点(t=0.5)下方 5px，多条 spoke 天然错开
-                    java.awt.FontMetrics fmS = g.getFontMetrics(g.getFont());
-                    double mx = 0.25 * xS + 0.5 * cx + 0.25 * xHub;
-                    double my = 0.25 * yS + 0.5 * cy + 0.25 * yHub;
-                    g.drawString(slen, (int) (mx - fmS.stringWidth(slen) / 2),
-                            (int) (my) + fmS.getAscent() + 5);
-                    // 箭头指向 hub 侧（曲线终点附近）
-                    drawDirArrow(g, xHub + (xS < xHub ? -6 : 6), yHub + (yS < yHub ? -4 : 4),
-                            xS < xHub ? -1 : 1, c);
-                    // v0.1.31：去掉曲线端点/汇聚处的 "P1"、"hub×N" 小字标注——画面更干净
-                    idx++;
-                }
-                g.setColor(new Color(60, 60, 60));
-                g.fillOval(xHub - 2, yHub - 2, 4, 4);
             }
         }
 
@@ -647,49 +609,56 @@ public class PrimerTrack extends AbstractTrack {
             map.put(p, p.rowOverride);
         }
 
-        // 按 ampliconId 分组（仅 size>=2 视为配对组）
-        java.util.Map<String, java.util.List<Primer>> groups =
-                new java.util.HashMap<String, java.util.List<Primer>>();
-        for (Primer p : vis) {
-            if (p.ampliconId != null && !map.containsKey(p)) {
-                groups.computeIfAbsent(p.ampliconId, new java.util.function.Function<String, java.util.List<Primer>>() {
-                    public java.util.List<Primer> apply(String k) { return new java.util.ArrayList<Primer>(); }
-                });
-                groups.get(p.ampliconId).add(p);
+        // 按边的连通分量分组（边模型 v0.1.41）：有连线（同分量）的引物同排。
+        // 一条引物可同时连多条（多连）→ 以首次归并到的分量所在行安放（多重 PCR 共用一行）。
+        java.util.Map<String, Primer> visMap = new java.util.HashMap<String, Primer>();
+        for (Primer p : vis) visMap.put(p.name, p);
+        java.util.List<Primer> freeP = new java.util.ArrayList<Primer>();
+        for (Primer p : vis) if (!map.containsKey(p)) freeP.add(p);
+        int n = freeP.size();
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) parent[i] = i;
+        for (int i = 0; i < n; i++) {
+            Primer p = freeP.get(i);
+            if (p.pairedWith == null) continue;
+            for (String nm : p.pairedWith) {
+                Primer q = visMap.get(nm);
+                if (q == null || map.containsKey(q)) continue;
+                int j = freeP.indexOf(q);
+                if (j < 0) continue;
+                int ri = i, rj = j;
+                while (parent[ri] != ri) ri = parent[ri];
+                while (parent[rj] != rj) rj = parent[rj];
+                if (ri != rj) parent[ri] = rj;
             }
         }
-
-        // 1) 配对组
-        for (java.util.List<Primer> grp : groups.values()) {
-            if (grp.size() < 2) continue;
+        java.util.Map<Integer, java.util.List<Primer>> comps = new java.util.LinkedHashMap<Integer, java.util.List<Primer>>();
+        for (int i = 0; i < n; i++) {
+            int r = i; while (parent[r] != r) r = parent[r];
+            comps.computeIfAbsent(r, new java.util.function.Function<Integer, java.util.List<Primer>>() {
+                public java.util.List<Primer> apply(Integer k) { return new java.util.ArrayList<Primer>(); }
+            }).add(freeP.get(i));
+        }
+        for (java.util.List<Primer> comp : comps.values()) {
+            if (comp.size() < 2) continue;
+            java.util.List<Primer> fixed = new java.util.ArrayList<Primer>();
             java.util.List<Primer> members = new java.util.ArrayList<Primer>();
-            for (Primer p : grp) if (!map.containsKey(p)) members.add(p);
+            for (Primer m : comp) {
+                Integer rr = map.get(m);
+                if (rr != null) fixed.add(m); else members.add(m);
+            }
             if (members.isEmpty()) continue;
-            java.util.Collections.sort(members, new java.util.Comparator<Primer>() {
-                public int compare(Primer x, Primer y) { return x.start - y.start; }
-            });
-            if (members.size() == 1) {
-                // 组内其他成员已被手动固定行 → 剩余成员放同行
-                Primer only = members.get(0);
-                Integer r0 = map.get(grp.get(0));
-                if (r0 == null) r0 = 0;
-                ensureRows(rows, r0);
-                rows.get(r0).add(only);
-                map.put(only, r0);
-                continue;
+            if (fixed.isEmpty()) {
+                long lo = Long.MAX_VALUE, hi = Long.MIN_VALUE;
+                for (Primer m : members) { long[] sp = spanOf(m); lo = Math.min(lo, sp[0]); hi = Math.max(hi, sp[1]); }
+                int t = -1;
+                for (int i = 0; i < rows.size(); i++) { if (!rowOverlaps(rows.get(i), lo, hi)) { t = i; break; } }
+                if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+                for (Primer m : members) { rows.get(t).add(m); map.put(m, t); }
+            } else {
+                Integer r0 = map.get(fixed.get(0));
+                for (Primer m : members) { ensureRows(rows, r0); rows.get(r0).add(m); map.put(m, r0); }
             }
-            long lo = Long.MAX_VALUE, hi = Long.MIN_VALUE;
-            for (Primer m : members) {
-                long[] sp = spanOf(m);
-                lo = Math.min(lo, sp[0]);
-                hi = Math.max(hi, sp[1]);
-            }
-            int t = -1;
-            for (int i = 0; i < rows.size(); i++) {
-                if (!rowOverlaps(rows.get(i), lo, hi)) { t = i; break; }
-            }
-            if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
-            for (Primer m : members) { rows.get(t).add(m); map.put(m, t); }
         }
 
         // 2) 未配对（单条）引物
@@ -880,7 +849,8 @@ public class PrimerTrack extends AbstractTrack {
             sb.append("<b>").append(p.name).append("</b>")
               .append("  ").append(p.strand == '+' ? "F (+)" : "R (−)")
               .append("  角色: ").append(p.role == null ? "-" : p.role);
-            if (p.ampliconId != null) sb.append("  |  配对组: ").append(p.ampliconId);
+            if (p.pairedWith != null && !p.pairedWith.isEmpty())
+                sb.append("  |  配对: ").append(String.join(", ", p.pairedWith));
             sb.append("<br>位置: ").append(p.chr).append(":").append(p.start + 1).append("-").append(p.end)
               .append("  (").append(p.length()).append(" bp)");
             sb.append("<br>Tm: ").append(fmtD(p.tm)).append(" ℃   GC: ").append(fmtD(p.gc)).append(" %");
@@ -987,7 +957,7 @@ public class PrimerTrack extends AbstractTrack {
             // v0.1.18：取消该引物配对——只断开与之相关的连线；同组其余成员间连线（>=2 条时）保留
             menu.add(item("取消该引物配对（仅断开相关连线）", new Runnable() {
                 public void run() {
-                    if (hit.ampliconId == null) {
+                    if (hit.pairedWith == null || hit.pairedWith.isEmpty()) {
                         JOptionPane.showMessageDialog(null, "该引物未参与任何配对。");
                         return;
                     }
@@ -1092,7 +1062,7 @@ public class PrimerTrack extends AbstractTrack {
         batchMenu.add(item("解除全部配对", new Runnable() {
             public void run() {
                 boolean hasPair = false;
-                for (Primer p : PrimerStore.getPrimers()) if (p.ampliconId != null) { hasPair = true; break; }
+                for (Primer p : PrimerStore.getPrimers()) if (p.pairedWith != null && !p.pairedWith.isEmpty()) { hasPair = true; break; }
                 if (!hasPair) {
                     JOptionPane.showMessageDialog(null, "当前没有已配对的引物。");
                     return;

@@ -64,7 +64,9 @@ public class AddPrimerDialog {
         incLen.setSelected(PrimerStore.defaultIncludeLen);
         incLen.setToolTipText("勾选：填写值=引物+延伸总长；不勾：填写值=延伸部分长度");
         final JTextField pairF = new JTextField(existing != null ? PrimerStore.groupPartnerNames(existing) : "", 16);
-        final JLabel ampF = new JLabel(existing == null ? "（新建时留空，配对时生成）" : existing.ampliconId);
+        final JLabel ampF = new JLabel(existing == null ? "（新建时不配对）"
+                : (existing.pairedWith != null && !existing.pairedWith.isEmpty()
+                        ? "已配对: " + String.join(", ", existing.pairedWith) : "（无配对）"));
         int r2 = 0;
         addRow(seqSet, gcs, r2++, "F 测序长度 nt (R1)", readF);
         addRow(seqSet, gcs, r2++, "R 测序长度 nt (R2)", readR);
@@ -353,9 +355,9 @@ public class AddPrimerDialog {
                     int readLen = incLen.isSelected() ? Math.max(0, raw - (en - s)) : raw;
 
                     if (existing == null) {
-                        // v0.1.38：新建引物绝不带任何配对信息（ampliconId/pairWith 一律清空），避免与已有扩增子撞 id 而被误连。
+                        // v0.1.41：新建引物绝不带任何配对信息（pairedWith 留空），避免与已有连线撞名而被误连。
                         Primer p = new Primer(name, chr, s, en, strand, role, readLen, null);
-                        p.pairWith = null;
+                        p.pairedWith = new java.util.LinkedHashSet<String>();
                         p.group = group;   // 写入打开对话框的那条引物轨所属分组
                         PrimerStore.add(p);
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
@@ -368,8 +370,7 @@ public class AddPrimerDialog {
                         existing.strand = strand;
                         existing.role = role;
                         existing.readLen = readLen;
-                        existing.pairWith = pairText.isEmpty() ? null : pairText;
-                        PrimerStore.detach(existing);
+                        PrimerStore.detach(existing);   // 先断开旧边，再按 pairNames 重建
                         if (pairNames.length > 0) PrimerStore.linkByNames(existing, pairNames);
                         PrimerStore.refreshSequence(existing);
                         // v0.1.30：编辑保存时不再自动跑 O(n²) 二聚体评估

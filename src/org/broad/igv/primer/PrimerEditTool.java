@@ -333,14 +333,10 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             if (sel == null || sel == hit) {
                 PrimerStore.selected = hit;       // 首次/再次点击：定为锚点（配对基准）
             } else {
-                boolean paired = sel.ampliconId != null && sel.ampliconId.equals(hit.ampliconId);
-                if (paired) {
-                    PrimerStore.unpairPrimer(sel, hit);   // 已连 → 取消这两条之间的连线
-                } else {
-                    PrimerStore.mergePair(sel, hit);      // 未连 → 产生 pair 连线
-                }
-                // 锚点保持选中，便于继续切换/叠加；同理 unpair 后 sel 仍可作锚点
-                PrimerStore.selected = sel;
+                // v0.1.41 边模型：Ctrl+点击 切换 sel 与 hit「这一条」边的连线——
+                // 已连则只删这一条（不影响 sel/hit 的其他边）；未连则只加这一条（天然支持一引物多连）。
+                PrimerStore.toggleEdge(sel, hit);
+                PrimerStore.selected = sel;        // 锚点保持选中，便于连续操作
             }
             e.consume();                              // 阻止 IGV 原生 pan/zoom 对 Ctrl 点击的响应
             dp.repaint();
