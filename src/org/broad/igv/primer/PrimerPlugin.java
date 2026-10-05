@@ -98,6 +98,26 @@ public class PrimerPlugin implements IGVPlugin {
             if (it.next().getValue() == t) it.remove();
         }
         PrimerTrack.ALL.remove(t);
+        // v0.1.45：关掉最后一条轨后必须补一条兜底轨，否则「导入 BED」入口随轨消失 → 无法再导入
+        ensureFallbackTrack();
+    }
+
+    /**
+     * v0.1.45：保证始终至少存在一条引物轨（group==null 的手动轨）。
+     * 「导入 BED / 导出 BED / 进入编辑」等入口只挂在引物轨自带的工具条与右键菜单上；
+     * 一旦最后一条轨被关闭（且原手动轨已被首个导入的 BED 认领走），入口随轨一起消失，就再也无法导入。
+     * 这里在关闭轨后、以及守护定时器发现「一条不剩」时自动补一条空的手动轨兜底。
+     */
+    public static synchronized void ensureFallbackTrack() {
+        if (!knownTracks.isEmpty()) return;   // 还有轨，无需兜底
+        try {
+            PrimerTrack t = new PrimerTrack();   // group==null 手动轨；构造时已加入 PrimerTrack.ALL
+            IGV.getInstance().addTracks(Collections.singletonList(t), PanelName.DATA_PANEL);
+            knownTracks.add(t);
+            try { IGV.getInstance().repaintDataPanels(); } catch (Throwable ignore) { }
+        } catch (Throwable ignore) {
+            // IGV 尚未就绪等异常：下一轮守护定时器会再试
+        }
     }
 
     private void startPrimerTrackKeeper() {
@@ -106,6 +126,9 @@ public class PrimerPlugin implements IGVPlugin {
                 try {
                     IGV igv = IGV.getInstance();
                     if (igv == null) return;
+                    // v0.1.45：一条轨都不剩时补一条手动轨（兼容被 IGV 原生方式删除/打开 session 清空的情况），
+                    // 保证「导入 BED」入口永远在，不会因最后一条轨被关而锁死。
+                    ensureFallbackTrack();
                     // 重新挂载所有已知轨（session 打开会清空插件轨）
                     for (PrimerTrack t : new java.util.ArrayList<PrimerTrack>(knownTracks)) {
                         boolean present = false;
