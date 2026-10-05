@@ -244,6 +244,7 @@ public class ExportUtils {
             String color = null;
             int row = -1;       // v0.1.6：|r行号 → rowOverride（布局定死恢复）；-1 = 自动布局
             String aId = null;
+            java.util.List<String> partners = new java.util.ArrayList<String>();  // v0.1.46：先收集，引物入列后再写 pairedWith
             if (name.indexOf('|') > 0) {
                 String[] parts = name.split("\\|");
                 name = parts[0];
@@ -259,9 +260,11 @@ public class ExportUtils {
                         color = seg.substring(1);
                     } else if (seg.startsWith("p") && seg.length() > 1) {
                         // 边模型：|p 后跟若干伙伴名，';' 分隔（v0.1.41+）
+                        // v0.1.46 修复：此处本引物尚未加入 out，原 addEdgeName(out, name, ...) 按名找不到自己 → 边全丢。
+                        // 改为先收集，out.add(p) 之后再写入 pairedWith。
                         for (String nm : seg.substring(1).split(";")) {
                             nm = nm.trim();
-                            if (!nm.isEmpty()) addEdgeName(out, name, nm);
+                            if (!nm.isEmpty()) partners.add(nm);
                         }
                     } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
                         try { row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) {}
@@ -280,6 +283,10 @@ public class ExportUtils {
             p.color = color;
             if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
             out.add(p);
+            if (!partners.isEmpty()) {           // v0.1.46：引物已在 out 中，此时才写边
+                if (p.pairedWith == null) p.pairedWith = new java.util.LinkedHashSet<String>();
+                p.pairedWith.addAll(partners);
+            }
             n++;
             if (aId != null) { p.ampliconId = aId; legacyGroupMembers.add(p); }  // 旧格式：挂到组，稍后重建边
         }
