@@ -19,6 +19,15 @@ import java.awt.event.ActionListener;
  */
 public class AddPrimerDialog {
 
+    /** v0.1.48：按名字找伙伴引物（必须已载入序列，否则画不出碱基比对） */
+    private static Primer findPartnerWithSeq(String name) {
+        if (name == null) return null;
+        for (Primer q : PrimerStore.getPrimers()) {
+            if (name.equals(q.name) && q.seq != null && q.seq.length() >= 4) return q;
+        }
+        return null;
+    }
+
     public static void show(final int bp, final Primer existing, final String group) {
         Frame owner = IGV.getMainFrame();
         final JDialog dlg = new JDialog(owner, existing == null ? "添加引物" : "编辑引物 " + existing.name, true);
@@ -273,6 +282,22 @@ public class AddPrimerDialog {
                             HeteroHit h = p.topHetero.get(k);
                             tb.append(String.format("%d. %-14s \u0394G=%6.1f  3'comp=%d%n",
                                     k + 1, h.partnerName, h.dg, h.c3));
+                            // v0.1.48：每条命中补一段碱基配对排布（与上面异源二聚体同样的可视化），
+                            // 只看名称+ΔG 无法直观知道到底哪几个碱基互补、3' 端是否咬住。
+                            Primer pt = findPartnerWithSeq(h.partnerName);
+                            if (pt == null) {
+                                tb.append("      （伙伴未载入序列，无法绘制比对）%n");
+                            } else {
+                                PrimerMetrics.DimerShape sh = PrimerMetrics.dimerShape(p.seq, pt.seq);
+                                if (sh.valid) {
+                                    tb.append("     5'-").append(sh.topLine).append("-3'").append('\n');
+                                    tb.append("       ").append(sh.bondLine).append('\n');
+                                    tb.append("     3'-").append(sh.botLine).append("-5'").append('\n');
+                                } else {
+                                    tb.append("      （序列过短，无法绘制比对）");
+                                    tb.append('\n');
+                                }
+                            }
                         }
                     }
                     topArea.setText(tb.toString());

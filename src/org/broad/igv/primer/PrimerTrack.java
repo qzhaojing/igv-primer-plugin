@@ -100,6 +100,15 @@ public class PrimerTrack extends AbstractTrack {
         java.util.Map<String, Primer> nameMap = new java.util.HashMap<String, Primer>();
         for (Primer p : vis) nameMap.put(p.name, p);
         java.util.Set<String> drawnEdges = new java.util.HashSet<String>();
+        // v0.1.48：每条边按「正向引物的第几条 spoke」取区分色 —— 同一 F 的多条连线颜色互不相同，
+        // 一对多多重 PCR 也能一眼分清；选中时该色提亮 + 加粗。
+        java.util.Map<String, Integer> spokeSeq = new java.util.HashMap<String, Integer>();
+        Object oldAA = null;
+        try {
+            oldAA = ((Graphics2D) g).getRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING);
+            ((Graphics2D) g).setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING,
+                    java.awt.RenderingHints.VALUE_ANTIALIAS_ON);
+        } catch (Throwable ignore) { }
         for (Primer p : vis) {
             if (p.pairedWith == null) continue;
             for (String nm : p.pairedWith) {
@@ -117,30 +126,45 @@ public class PrimerTrack extends AbstractTrack {
                 int x1 = ctx.bpToScreenPixel(lo), x2 = ctx.bpToScreenPixel(hi);
                 int ya = rowY(rect, rows.get(a)) + ARROW_H / 2;
                 int yb = rowY(rect, rows.get(b)) + ARROW_H / 2;
-                g.setColor(sel ? new Color(40, 90, 200) : new Color(150, 150, 150));
-                if (sel) g.setStroke(new BasicStroke(2f));
+                // 取色：以正向（+）引物为基准统计 spoke 序号
+                Primer fwd = a.strand == '+' ? a : b;
+                String fKey = fwd == null ? key : fwd.name;
+                Integer prev = spokeSeq.get(fKey);
+                int cIdx = prev == null ? 0 : prev;
+                spokeSeq.put(fKey, cIdx + 1);
+                Color base = SPOKE_COLORS[cIdx % SPOKE_COLORS.length];
+                Color lineC = sel ? base.brighter() : base;
+                g.setColor(lineC);
+                g.setStroke(new BasicStroke(sel ? 3.2f : 2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 // 二次贝塞尔拱形连线，控制点在两锚点中点上方拱起
                 int cx = (x1 + x2) / 2;
                 int cy = Math.min(ya, yb) - Math.max(14, Math.abs(ya - yb) / 3);
                 g.draw(new java.awt.geom.QuadCurve2D.Float(x1, ya, cx, cy, x2, yb));
-                if (sel) g.setStroke(new BasicStroke(1f));
+                g.setStroke(new BasicStroke(1f));
                 boolean aLeft = a.start <= b.start;
                 Color ca = a.strand == '+' ? new Color(0, 150, 0) : new Color(0, 80, 220);
                 Color cb = b.strand == '+' ? new Color(0, 150, 0) : new Color(0, 80, 220);
                 drawDirArrow(g, x1, ya, aLeft ? 1 : -1, ca);
                 drawDirArrow(g, x2, yb, aLeft ? -1 : 1, cb);
                 int len = hi - lo;
-                g.setColor(Color.DARK_GRAY);
-                g.setFont(g.getFont().deriveFont(11f));
+                // 产物长度标签：颜色跟随本条连线（描一层半透明白边保证压在线上也清晰）
+                g.setFont(g.getFont().deriveFont(java.awt.Font.BOLD, 11f));
                 String lenTxt = formatLen(len);
                 java.awt.FontMetrics fm = g.getFontMetrics(g.getFont());
                 double mx2 = 0.25 * x1 + 0.5 * cx + 0.25 * x2;
                 double my2 = 0.25 * ya + 0.5 * cy + 0.25 * yb;
-                g.drawString(lenTxt, (int) (mx2 - fm.stringWidth(lenTxt) / 2),
-                        (int) (my2) + fm.getAscent() + 5);
+                int tx = (int) (mx2 - fm.stringWidth(lenTxt) / 2);
+                int ty = (int) (my2) + fm.getAscent() + 5;
+                g.setColor(new Color(255, 255, 255, 190));
+                g.drawString(lenTxt, tx + 1, ty + 1);
+                g.setColor(sel ? lineC : lineC.darker());
+                g.drawString(lenTxt, tx, ty);
                 g.setFont(g.getFont().deriveFont(10f));
             }
         }
+        try {
+            if (oldAA != null) ((Graphics2D) g).setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, oldAA);
+        } catch (Throwable ignore) { }
 
         // 2) 每条引物（按各自行 y 渲染）
         for (Primer p : vis) {
@@ -822,6 +846,10 @@ public class PrimerTrack extends AbstractTrack {
     public void overlay(RenderContext ctx, Rectangle rect) {
         int[] guides = PrimerEditTool.guidePositions(ctx.getChr());
         if (guides == null) return;
+        // v0.1.48：全窗 ruler（贯穿所有面板）已在生效时不再重复画轨内局部红线，避免两条重叠显脏
+        try {
+            if (PrimerEditTool.rulerActive()) return;
+        } catch (Throwable ignore) { }
         Graphics2D g = ctx.getGraphics();
         g.setColor(new Color(255, 60, 60));
         Graphics2D gg = (Graphics2D) g;
@@ -851,8 +879,11 @@ public class PrimerTrack extends AbstractTrack {
               .append("  角色: ").append(p.role == null ? "-" : p.role);
             if (p.pairedWith != null && !p.pairedWith.isEmpty())
                 sb.append("  |  配对: ").append(String.join(", ", p.pairedWith));
-            sb.append("<br>位置: ").append(p.chr).append(":").append(p.start + 1).append("-").append(p.end)
-              .append("  (").append(p.length()).append(" bp)");
+            sb.append("<br>位置: ").append(p.chr).append(":").append(p.start + 1).append("-").append(p.end);
+            // v0.1.48：显式单列「长度」（原仅在坐标后带 "(N bp)"，改动长度后不易察觉且不醒目）
+            int nBp = p.length();
+            String lenTip = nBp < 1000 ? (nBp + " bp") : String.format("%.2f kb", nBp / 1000.0);
+            sb.append("<br>长度: <b>").append(lenTip).append("</b>");
             sb.append("<br>Tm: ").append(fmtD(p.tm)).append(" ℃   GC: ").append(fmtD(p.gc)).append(" %");
             sb.append("<br>hairpin ΔG: ").append(fmtD(p.hairpinDG))
               .append("   self-dimer ΔG: ").append(fmtD(p.selfDG));

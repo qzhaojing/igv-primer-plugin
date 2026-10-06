@@ -100,6 +100,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                     rulerGlass = new RulerGlass();
                     f.setGlassPane(rulerGlass);
                     rulerGlass.setVisible(true);
+                    // v0.1.48：装完必须 validate 生效，否则 glass 不显示 → 只剩轨内局部红线
+                    try { f.getRootPane().revalidate(); f.getRootPane().repaint(); } catch (Exception ignore2) { }
                 }
             }
         } catch (Exception ignore) {
@@ -182,22 +184,45 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     /** 在 glass pane 上画贯穿 DataPanel 全高的 ruler 线（对齐参考轨/其他 track） */
     private void updateRuler(DataPanel dp, ReferenceFrame frame, int a, int b) {
-        if (dp == null || rulerGlass == null || frame == null) return;
+        if (dp == null || frame == null) return;
+        if (rulerGlass == null) setupGlass();
+        if (rulerGlass == null) return;
         try {
             int x1 = (int) Math.round(frame.getScreenPosition(a));
             int x2 = (int) Math.round(frame.getScreenPosition(b));
             java.awt.Point p1 = SwingUtilities.convertPoint(dp, x1, 0, rulerGlass);
             java.awt.Point p2 = SwingUtilities.convertPoint(dp, x2, 0, rulerGlass);
-            java.awt.Point pT = SwingUtilities.convertPoint(dp, 0, 0, rulerGlass);
-            java.awt.Point pB = SwingUtilities.convertPoint(dp, 0, dp.getHeight(), rulerGlass);
+            // v0.1.48：纵向范围 = 所有数据面板「可见区」的并集 → 红线像 ruler line 一样贯穿全部面板上下，
+            // 而不是只画在本条引物轨里。用 getVisibleRect() 自动处理滚动/被滚出可视区的情况。
+            int top = Integer.MAX_VALUE, bot = Integer.MIN_VALUE;
+            boolean found = false;
+            for (DataPanel cand : findDataPanels()) {
+                java.awt.Rectangle vr = cand.getVisibleRect();
+                if (vr.width <= 0 || vr.height <= 0) continue;
+                java.awt.Point t = SwingUtilities.convertPoint(cand, vr.x, vr.y, rulerGlass);
+                top = Math.min(top, t.y);
+                bot = Math.max(bot, t.y + vr.height);
+                found = true;
+            }
+            if (!found) {   // 退化：拿不到并集时至少覆盖当前面板
+                java.awt.Point pT = SwingUtilities.convertPoint(dp, 0, 0, rulerGlass);
+                java.awt.Point pB = SwingUtilities.convertPoint(dp, 0, dp.getHeight(), rulerGlass);
+                top = pT.y; bot = pB.y;
+            }
             rulerGlass.active = inEditMode();
             rulerGlass.xs = new int[]{p1.x, p2.x};
-            rulerGlass.yTop = pT.y;
-            rulerGlass.yBot = pB.y;
+            rulerGlass.yTop = top;
+            rulerGlass.yBot = bot;
             rulerGlass.guideBps = new int[]{a, b};
+            rulerGlass.setVisible(true);
             rulerGlass.repaint();
         } catch (Exception ignore) {
         }
+    }
+
+    /** v0.1.48：全窗 ruler 是否正在生效（生效时 PrimerTrack 不再重复画局部红线，避免两条重叠） */
+    public static boolean rulerActive() {
+        return inEditMode() && rulerGlass != null && rulerGlass.active && rulerGlass.xs != null;
     }
 
     private void clearGuides() {
@@ -457,6 +482,23 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             dragging = null;
             mode = MODE_NONE;
             PrimerStore.refresh();
+            // v0.1.48：鼠标松手后往往停在原地不动 → Swing 不会重新取 tooltip 文本，
+            // 于是悬浮框还显示改之前的信息。这里补发一次 MOUSE_MOVED 强制刷新。
+            refreshTooltip((DataPanel) e.getSource());
+        }
+    }
+
+    /** v0.1.48：在当前鼠标位置向 DataPanel 补发一个 MOUSE_MOVED，强制刷新悬浮提示内容。 */
+    private static void refreshTooltip(DataPanel dp) {
+        if (dp == null) return;
+        try {
+            java.awt.Point ml = java.awt.MouseInfo.getPointerInfo().getLocation();
+            java.awt.Point local = new java.awt.Point(ml);
+            SwingUtilities.convertPointFromScreen(local, dp);
+            if (local.x < 0 || local.y < 0 || local.x > dp.getWidth() || local.y > dp.getHeight()) return;
+            dp.dispatchEvent(new java.awt.event.MouseEvent(dp, java.awt.event.MouseEvent.MOUSE_MOVED,
+                    System.currentTimeMillis(), 0, local.x, local.y, 0, false));
+        } catch (Throwable ignore) {
         }
     }
 }
