@@ -28,6 +28,8 @@ import glob
 import datetime
 
 PLUGIN = "org/broad/igv/primer/"
+# v0.1.47：IGV 本体补丁类（SessionWriter 等）也需要注入/更新
+PATCHES = ("org/broad/igv/session/",)
 REG = "org/broad/igv/ui/resources/builtin_plugin_list.txt"
 MARK = "org.broad.igv.primer.PrimerPlugin"
 
@@ -45,7 +47,7 @@ def load_plugin_bytes():
     if os.path.exists(jar):
         z = zipfile.ZipFile(jar)
         for n in z.namelist():
-            if n.startswith(PLUGIN) and n.endswith(".class"):
+            if n.endswith(".class") and (n.startswith(PLUGIN) or n.startswith(PATCHES)):
                 cls[n] = z.read(n)
         z.close()
         log("从 PrimerPlugin.jar 读取 %d 个类" % len(cls))

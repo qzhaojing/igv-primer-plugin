@@ -11,6 +11,7 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.io.StringReader;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -78,19 +79,27 @@ public class ExportUtils {
         try {
             w.write("track name=\"Primer Designer\" description=\"primers; thick=primer body; color=strand/fail\" itemRgb=\"On\"");
             w.newLine();
-            java.util.Map<Primer, Integer> rows = PrimerTrack.allScreenRows();
-            for (Primer p : primers) {
-                // thick 限制在 [start,end] 内（= 引物本体），测序延长区单独展示、不合并进引物长度
-                // v0.1.6：把当前布局行号写死进 name（|r行号），导入/自动保存可原样恢复上下排布
-                Integer row = rows.containsKey(p) ? rows.get(p) : p.rowOverride;
-                String nm = p.bedName(row);
-                w.write(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
-                        p.chr, p.start, p.end, nm, p.strand, p.start, p.end, p.colorHex()));
-                w.newLine();
-            }
+            w.write(toBedText(primers));
         } finally {
             w.close();
         }
+    }
+
+    /**
+     * 把引物列表渲染成 BED 正文（不含 track 头行）。导出文件与 session 保存共用同一份序列化，
+     * 内含 role / readLen / 分组 |g / 配对边 |p / 颜色 |c / 布局行 |r，可被 parseLines 完整还原。
+     */
+    static synchronized String toBedText(List<Primer> primers) {
+        StringBuilder sb = new StringBuilder();
+        java.util.Map<Primer, Integer> rows = null;
+        try { rows = PrimerTrack.allScreenRows(); } catch (Throwable ignore) { }  // 渲染上下文缺失时退化为 rowOverride
+        for (Primer p : primers) {
+            Integer row = (rows != null && rows.containsKey(p)) ? rows.get(p) : p.rowOverride;
+            sb.append(String.format("%s\t%d\t%d\t%s\t0\t%c\t%d\t%d\t%s",
+                    p.chr, p.start, p.end, p.bedName(row), p.strand, p.start, p.end, p.colorHex()));
+            sb.append('\n');
+        }
+        return sb.toString();
     }
 
     /** 自动保存文件：~/.igv_primer_autosave.bed（session 不保存插件轨，用它兜底防丢失；包含所有分组） */
@@ -229,8 +238,21 @@ public class ExportUtils {
     /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p伙伴 解析为本引物的边（pairedWith）；
      *  旧格式 |a组 在解析后按 F-R 重建边（见 postProcessLegacyGroups）；|r行号 恢复布局行。 */
     private static int parseBED(File f, String group, List<Primer> out) throws Exception {
-        int n = 0;
         BufferedReader r = new BufferedReader(new FileReader(f));
+        try { return parseLines(r, group, out); } finally { r.close(); }
+    }
+
+    /** 从 BED 文本解析（v0.1.47：session 恢复用）。格式与文件版一致；解析失败返回 0。 */
+    public static int parseBEDText(String text, String group, List<Primer> out) {
+        try {
+            return parseLines(new BufferedReader(new StringReader(text)), group, out);
+        } catch (Exception ignore) {
+            return 0;
+        }
+    }
+
+    private static int parseLines(BufferedReader r, String group, List<Primer> out) throws Exception {
+        int n = 0;
         String line;
         java.util.List<Primer> legacyGroupMembers = new java.util.ArrayList<Primer>();
         while ((line = r.readLine()) != null) {
@@ -290,7 +312,6 @@ public class ExportUtils {
             n++;
             if (aId != null) { p.ampliconId = aId; legacyGroupMembers.add(p); }  // 旧格式：挂到组，稍后重建边
         }
-        r.close();
         postProcessLegacyGroups(legacyGroupMembers);   // 旧 |a 组 → F-R 边
         sanitizeEdges(out);                            // 校验所有边（跨染色体/跨度过大/无法成产物 → 剥离）
         return n;

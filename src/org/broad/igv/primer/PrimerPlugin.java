@@ -102,6 +102,16 @@ public class PrimerPlugin implements IGVPlugin {
         ensureFallbackTrack();
     }
 
+    /** v0.1.47：仅从注册表注销该轨（由 session 还原接管布局），不做 IGV 面板移除、也不触发兜底新建。 */
+    public static synchronized void forgetTrack(PrimerTrack t) {
+        if (t == null) return;
+        knownTracks.remove(t);
+        for (java.util.Iterator<Map.Entry<String, PrimerTrack>> it = groupTracks.entrySet().iterator(); it.hasNext(); ) {
+            if (it.next().getValue() == t) it.remove();
+        }
+        PrimerTrack.ALL.remove(t);
+    }
+
     /**
      * v0.1.45：保证始终至少存在一条引物轨（group==null 的手动轨）。
      * 「导入 BED / 导出 BED / 进入编辑」等入口只挂在引物轨自带的工具条与右键菜单上；
@@ -126,6 +136,8 @@ public class PrimerPlugin implements IGVPlugin {
                 try {
                     IGV igv = IGV.getInstance();
                     if (igv == null) return;
+                    // v0.1.47：当前 session 换了另一份 → 从中还原引物轨（含分组/连线/布局/颜色）
+                    PrimerSession.checkSessionSync(igv);
                     // v0.1.45：一条轨都不剩时补一条手动轨（兼容被 IGV 原生方式删除/打开 session 清空的情况），
                     // 保证「导入 BED」入口永远在，不会因最后一条轨被关而锁死。
                     ensureFallbackTrack();

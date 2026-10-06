@@ -34,6 +34,14 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 echo "== 编译成功 =="
 ls "$OUT"/org/broad/igv/primer/
 
+# v0.1.47：编译 IGV 本体补丁类（igv-patches/ 下的 SessionWriter 等），输出到同一 classes 目录以便整体注入。
+# classpath 需同时含干净基类与本插件类（补丁会调用 PrimerSession 等插件 API）。
+if ls "$SRC"/../igv-patches/*.java >/dev/null 2>&1; then
+  "$JAVAC" -encoding UTF-8 -source 8 -target 8 -cp "$IGV_JAR;$OUT" -d "$OUT" \
+    "$SRC"/../igv-patches/*.java
+  echo "== 补丁类编译成功 =="
+fi
+
 # v0.1.25：重打包 PrimerPlugin.jar（install.py 的注入源；此前漏了这步导致注入的一直是旧类）
 rm -f PrimerPlugin.jar
 "$JAVA8_HOME/bin/jar" cf PrimerPlugin.jar -C "$OUT" org/
