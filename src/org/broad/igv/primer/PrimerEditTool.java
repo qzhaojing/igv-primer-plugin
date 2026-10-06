@@ -235,57 +235,136 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     }
 
     // ---------- 键盘快捷键：选中引物后方向键精确移动（避免鼠标拖动乱跑） ----------
-    // 用全局 AWTEventListener 捕获方向键：规避 DataPanel 焦点不确定导致的快捷键失灵。
+    // v0.1.51：两条分发路径并用。原先只有全局 AWTEventListener，一旦焦点落在
+    //   会自己吞掉方向键的组件上（顶栏搜索框/JTable/JTree 等有自身绑定），AKW listener 虽收到事件
+    //   却被 isTextInputFocused() 挡掉，功能就整体失灵。
+    //   ① 全局 AWTEventListener：焦点在任何地方都能兜底收到（务必保留）
+    //   ② 主窗体 rootPane 上的 WHEN_IN_FOCUSED_WINDOW 键绑定：Swing 正规路径，
+    //      配合「选中引物即 requestFocus 到 DataPanel」，从搜索框等场景切回来也能生效
+    // 两条路径对同一物理按键会各触发一次 → 用极短窗口去重（远小于系统按键重复间隔，不影响长按连发）
     private static java.awt.event.AWTEventListener keyListener;
+    private static final java.util.List<KeyStroke> boundStrokes = new java.util.ArrayList<KeyStroke>();
+    private static final java.util.List<String> boundActionKeys = new java.util.ArrayList<String>();
+    private static long lastMoveKeyAt = 0;
+    private static int lastMoveKeyCode = -1;
+
+    /** 真正执行一次方向键移动；返回是否已处理（用于决定是否 consume，防止 IGV 原生平移双重响应） */
+    private static synchronized boolean handleMoveKey(int keyCode, boolean shift) {
+        long now = System.nanoTime();
+        if (keyCode == lastMoveKeyCode && (now - lastMoveKeyAt) < 4000000L) return true; // <4ms：同一按键重复分发
+        lastMoveKeyCode = keyCode;
+        lastMoveKeyAt = now;
+
+        if (!PrimerEditTool.inEditMode()) return false;
+        Primer sel = PrimerStore.selected;
+        if (sel == null) return false;
+        if (focusInOtherWindow()) return false;   // 焦点在别处窗口（如引物编辑对话框）不响应
+        if (isTextInputFocused()) return false;   // 在输入框打字时不拦截
+
+        int step = shift ? 10 : 1;
+        int horiz = 0, dRow = 0;
+        switch (keyCode) {
+            case java.awt.event.KeyEvent.VK_LEFT:  horiz = -step; break;
+            case java.awt.event.KeyEvent.VK_RIGHT: horiz =  step; break;
+            case java.awt.event.KeyEvent.VK_UP:    dRow = -1; break;
+            case java.awt.event.KeyEvent.VK_DOWN:  dRow =  1; break;
+            default: return false;
+        }
+
+        if (horiz != 0) {
+            int delta = horiz;
+            if (sel.start + delta < 0) delta = -sel.start;   // 防止越界到负坐标
+            if (delta != 0) {
+                sel.start += delta;
+                sel.end += delta;
+                PrimerStore.refreshSequence(sel);
+            }
+        }
+        if (dRow != 0) {
+            Integer cur = PrimerTrack.allScreenRows().get(sel);
+            int base = sel.rowOverride != null ? sel.rowOverride : (cur != null ? cur : 0);
+            sel.rowOverride = Math.max(0, base + dRow);
+        }
+        PrimerStore.refresh();
+        refreshTooltip(activePanel);   // v0.1.51：改完立即刷新悬浮提示（长度等随键盘移动变化）
+        return true;
+    }
 
     private static void installKeyboard() {
-        if (keyListener != null) return;
-        keyListener = new java.awt.event.AWTEventListener() {
-            public void eventDispatched(java.awt.AWTEvent ev) {
-                if (!(ev instanceof java.awt.event.KeyEvent)) return;
-                java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
-                if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
-                if (!PrimerEditTool.inEditMode()) return;
-                Primer sel = PrimerStore.selected;
-                if (sel == null) return;
-                if (isTextInputFocused()) return;   // 在对话框/输入框打字时不拦截
+        if (keyListener == null) {
+            keyListener = new java.awt.event.AWTEventListener() {
+                public void eventDispatched(java.awt.AWTEvent ev) {
+                    if (!(ev instanceof java.awt.event.KeyEvent)) return;
+                    java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
+                    if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
+                    int c = ke.getKeyCode();
+                    if (c != java.awt.event.KeyEvent.VK_LEFT && c != java.awt.event.KeyEvent.VK_RIGHT
+                            && c != java.awt.event.KeyEvent.VK_UP && c != java.awt.event.KeyEvent.VK_DOWN) return;
+                    if (handleMoveKey(c, ke.isShiftDown())) ke.consume();  // 阻止 IGV 原生方向键平移
+                }
+            };
+            java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
+                    keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
+        }
+        installKeyBindings();
+    }
 
-                int step = ke.isShiftDown() ? 10 : 1;
-                int horiz = 0, dRow = 0;
-                switch (ke.getKeyCode()) {
-                    case java.awt.event.KeyEvent.VK_LEFT:  horiz = -step; break;
-                    case java.awt.event.KeyEvent.VK_RIGHT: horiz =  step; break;
-                    case java.awt.event.KeyEvent.VK_UP:    dRow = -1; break;
-                    case java.awt.event.KeyEvent.VK_DOWN:  dRow =  1; break;
-                    default: return;
-                }
-
-                if (horiz != 0) {
-                    int delta = horiz;
-                    if (sel.start + delta < 0) delta = -sel.start;   // 防止越界到负坐标
-                    if (delta != 0) {
-                        sel.start += delta;
-                        sel.end += delta;
-                        PrimerStore.refreshSequence(sel);
-                    }
-                }
-                if (dRow != 0) {
-                    int base = sel.rowOverride != null ? sel.rowOverride
-                            : (PrimerTrack.allScreenRows().get(sel) != null ? PrimerTrack.allScreenRows().get(sel) : 0);
-                    sel.rowOverride = Math.max(0, base + dRow);
-                }
-                PrimerStore.refresh();
-                ke.consume();   // 阻止 IGV 原生方向键平移，避免双重响应
+    /** 主窗体 rootPane 上挂方向键绑定（仅编辑模式期间存在，退出即摘掉） */
+    private static void installKeyBindings() {
+        try {
+            java.awt.Window w = IGV.getMainFrame();
+            if (!(w instanceof JFrame)) return;
+            JRootPane rp = ((JFrame) w).getRootPane();
+            InputMap im = rp.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+            ActionMap am = rp.getActionMap();
+            int[] codes = {java.awt.event.KeyEvent.VK_LEFT, java.awt.event.KeyEvent.VK_RIGHT,
+                    java.awt.event.KeyEvent.VK_UP, java.awt.event.KeyEvent.VK_DOWN};
+            for (int c : codes) {
+                bindKey(im, am, c, false);
+                bindKey(im, am, c, true);
             }
-        };
-        java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
-                keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
+        } catch (Exception ignore) {
+        }
+    }
+
+    private static void bindKey(InputMap im, ActionMap am, final int code, final boolean shift) {
+        KeyStroke ks = KeyStroke.getKeyStroke(code, shift ? java.awt.event.InputEvent.SHIFT_DOWN_MASK : 0);
+        if (ks == null) return;
+        String key = "primer.move." + code + (shift ? ".shift" : "");
+        im.put(ks, key);
+        am.put(key, new AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { handleMoveKey(code, shift); }
+        });
+        if (!boundStrokes.contains(ks)) boundStrokes.add(ks);
+        if (!boundActionKeys.contains(key)) boundActionKeys.add(key);
     }
 
     private static void removeKeyboard() {
-        if (keyListener == null) return;
-        java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(keyListener);
-        keyListener = null;
+        if (keyListener != null) {
+            java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(keyListener);
+            keyListener = null;
+        }
+        try {
+            java.awt.Window w = IGV.getMainFrame();
+            if (w instanceof JFrame) {
+                InputMap im = ((JFrame) w).getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+                ActionMap am = ((JFrame) w).getRootPane().getActionMap();
+                for (KeyStroke ks : boundStrokes) im.remove(ks);
+                for (String k : boundActionKeys) am.remove(k);
+            }
+            boundStrokes.clear();
+            boundActionKeys.clear();
+        } catch (Exception ignore) {
+        }
+    }
+
+    /** 焦点是否落在主窗体以外的窗口（引物编辑对话框等模态窗口） */
+    private static boolean focusInOtherWindow() {
+        java.awt.Component f =
+                java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        if (f == null) return false;
+        java.awt.Window win = SwingUtilities.getWindowAncestor(f);
+        return win != null && win != IGV.getMainFrame();
     }
 
     /** 焦点是否在文本输入组件上（对话框输入框/下拉框/数字框等），是则跳过快捷键 */
@@ -363,6 +442,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 PrimerStore.toggleEdge(sel, hit);
                 PrimerStore.selected = sel;        // 锚点保持选中，便于连续操作
             }
+            dp.requestFocusInWindow();             // v0.1.51：同普通选中，焦点回收
             e.consume();                              // 阻止 IGV 原生 pan/zoom 对 Ctrl 点击的响应
             dp.repaint();
             return;
@@ -382,6 +462,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             Integer r0 = PrimerTrack.allScreenRows().get(hit);
             origRow = r0 == null ? 0 : r0;
             PrimerStore.selected = hit;
+            // v0.1.51：选中后把焦点抢回数据面板，否则焦点滞留搜索框等组件，方向键被其自身绑定吞掉
+            dp.requestFocusInWindow();
             dp.repaint();
             return;
         }
