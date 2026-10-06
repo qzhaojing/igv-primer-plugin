@@ -84,15 +84,14 @@ public class AddPrimerDialog {
         addRow(seqSet, gcs, r2++, "扩增子 ID", ampF);
 
         // ===== 序列与评估 =====
-        // v0.1.49：左列=指标，右列=二聚体排布（self + Top-5 异源纵向堆叠），压低整体高度
-        JPanel eval = new JPanel(new BorderLayout(10, 0));
+        // v0.1.50：内部左右两栏用与上排相同的 50/50 等宽 GridLayout，分界线与「基本信息|测序设置」对齐
+        JPanel eval = new JPanel(new GridLayout(1, 2, 10, 0));
         eval.setBorder(new TitledBorder("序列与评估（打开即自动显示，无需点击）"));
         JPanel evalGrid = new JPanel(new GridBagLayout());
-        eval.add(evalGrid, BorderLayout.CENTER);
         GridBagConstraints gce = new GridBagConstraints();
         gce.insets = new Insets(2, 4, 2, 4);
         gce.anchor = GridBagConstraints.WEST;
-        final JTextArea seqArea = new JTextArea(2, 26);
+        final JTextArea seqArea = new JTextArea(2, 30);
         seqArea.setEditable(false);
         seqArea.setLineWrap(true);
         seqArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -124,7 +123,11 @@ public class AddPrimerDialog {
         topBox.add(new JScrollPane(topArea), BorderLayout.CENTER);
 
         int r3 = 0;
-        addRow(evalGrid, gce, r3++, "序列", seqScroll);
+        gce.fill = GridBagConstraints.HORIZONTAL;
+        gce.weightx = 1.0;
+        addRow(evalGrid, gce, r3++, "序列", seqScroll);   // 序列框横向撑满左栏，便于展开查看
+        gce.fill = GridBagConstraints.NONE;
+        gce.weightx = 0.0;
         addRow(evalGrid, gce, r3++, "Tm", tmL);
         addRow(evalGrid, gce, r3++, "GC%", gcL);
         addRow(evalGrid, gce, r3++, "hairpin ΔG", hairL);
@@ -139,13 +142,12 @@ public class AddPrimerDialog {
         dimerRight.add(selfBox);
         dimerRight.add(Box.createVerticalStrut(6));
         dimerRight.add(topBox);
-        eval.add(dimerRight, BorderLayout.EAST);
+        eval.add(evalGrid);     // v0.1.50：GridLayout 50/50，左=指标，右=二聚体
+        eval.add(dimerRight);
 
-        // 容器：v0.1.49 基本信息 | 测序设置 左右排布，压低上半部高度
-        JPanel topRow = new JPanel();
-        topRow.setLayout(new BoxLayout(topRow, BoxLayout.X_AXIS));
+        // 容器：v0.1.50 基本信息 | 测序设置 也用 50/50 等宽，与下行评估区分栏对齐
+        JPanel topRow = new JPanel(new GridLayout(1, 2, 14, 0));
         topRow.add(basic);
-        topRow.add(Box.createHorizontalStrut(14));
         topRow.add(seqSet);
         JPanel form = new JPanel();
         form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
