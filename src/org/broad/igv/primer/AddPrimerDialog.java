@@ -84,7 +84,11 @@ public class AddPrimerDialog {
         addRow(seqSet, gcs, r2++, "扩增子 ID", ampF);
 
         // ===== 序列与评估 =====
-        JPanel eval = section("序列与评估（打开即自动显示，无需点击）");
+        // v0.1.49：左列=指标，右列=二聚体排布（self + Top-5 异源纵向堆叠），压低整体高度
+        JPanel eval = new JPanel(new BorderLayout(10, 0));
+        eval.setBorder(new TitledBorder("序列与评估（打开即自动显示，无需点击）"));
+        JPanel evalGrid = new JPanel(new GridBagLayout());
+        eval.add(evalGrid, BorderLayout.CENTER);
         GridBagConstraints gce = new GridBagConstraints();
         gce.insets = new Insets(2, 4, 2, 4);
         gce.anchor = GridBagConstraints.WEST;
@@ -102,54 +106,50 @@ public class AddPrimerDialog {
         final JLabel statusL = new JLabel("—");
         statusL.setForeground(Color.BLUE);
 
-        // 二聚体排布形状（左 self / 右 hetero），打开即自动显示，信息左右排列省纵向空间
-        final JTextArea selfArea = new JTextArea(3, 36);
+        // 二聚体排布形状（self），打开即自动显示
+        final JTextArea selfArea = new JTextArea(3, 34);
         selfArea.setEditable(false);
         selfArea.setLineWrap(false);
         selfArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
-        final JTextArea heteroArea = new JTextArea(3, 36);
-        heteroArea.setEditable(false);
-        heteroArea.setLineWrap(false);
-        heteroArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         // v0.1.39：全体系异源二聚体 Top-5 文本框（与其他所有引物相比，ΔG 最负优先）
-        final JTextArea topArea = new JTextArea(6, 36);
+        final JTextArea topArea = new JTextArea(8, 34);
         topArea.setEditable(false);
         topArea.setLineWrap(false);
         topArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JPanel selfBox = new JPanel(new BorderLayout());
         selfBox.setBorder(new TitledBorder("self-dimer"));
         selfBox.add(selfArea, BorderLayout.CENTER);
-        JPanel heteroBox = new JPanel(new BorderLayout());
-        heteroBox.setBorder(new TitledBorder("最差异源二聚体（全体系）"));
-        heteroBox.add(heteroArea, BorderLayout.CENTER);
-        JPanel dimerPanel = new JPanel();
-        dimerPanel.setLayout(new BoxLayout(dimerPanel, BoxLayout.X_AXIS));
-        dimerPanel.add(selfBox);
-        dimerPanel.add(Box.createHorizontalStrut(12));
-        dimerPanel.add(heteroBox);
         JPanel topBox = new JPanel(new BorderLayout());
         topBox.setBorder(new TitledBorder("Top-5 异源二聚体（全体系所有引物）"));
         topBox.add(new JScrollPane(topArea), BorderLayout.CENTER);
 
         int r3 = 0;
-        addRow(eval, gce, r3++, "序列", seqScroll);
-        addRow(eval, gce, r3++, "Tm", tmL);
-        addRow(eval, gce, r3++, "GC%", gcL);
-        addRow(eval, gce, r3++, "hairpin ΔG", hairL);
-        addRow(eval, gce, r3++, "self-dimer ΔG", selfL);
-        addRow(eval, gce, r3++, "异源二聚体 ΔG", heteroL);
-        addRow(eval, gce, r3++, "3' 互补碱基数", compL);
-        addRow(eval, gce, r3++, "评估状态", statusL);
-        gce.gridwidth = 2;
-        addRow(eval, gce, r3++, "二聚体排布", dimerPanel);
-        addRow(eval, gce, r3++, "异源二聚体 Top-5", topBox);
-        gce.gridwidth = 1;
+        addRow(evalGrid, gce, r3++, "序列", seqScroll);
+        addRow(evalGrid, gce, r3++, "Tm", tmL);
+        addRow(evalGrid, gce, r3++, "GC%", gcL);
+        addRow(evalGrid, gce, r3++, "hairpin ΔG", hairL);
+        addRow(evalGrid, gce, r3++, "self-dimer ΔG", selfL);
+        addRow(evalGrid, gce, r3++, "异源二聚体 ΔG", heteroL);
+        addRow(evalGrid, gce, r3++, "3' 互补碱基数", compL);
+        addRow(evalGrid, gce, r3++, "评估状态", statusL);
 
-        // 容器
+        // v0.1.49：二聚体排布（self + Top-5 异源）纵向堆在评估区右侧
+        JPanel dimerRight = new JPanel();
+        dimerRight.setLayout(new BoxLayout(dimerRight, BoxLayout.Y_AXIS));
+        dimerRight.add(selfBox);
+        dimerRight.add(Box.createVerticalStrut(6));
+        dimerRight.add(topBox);
+        eval.add(dimerRight, BorderLayout.EAST);
+
+        // 容器：v0.1.49 基本信息 | 测序设置 左右排布，压低上半部高度
+        JPanel topRow = new JPanel();
+        topRow.setLayout(new BoxLayout(topRow, BoxLayout.X_AXIS));
+        topRow.add(basic);
+        topRow.add(Box.createHorizontalStrut(14));
+        topRow.add(seqSet);
         JPanel form = new JPanel();
         form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
-        form.add(basic);
-        form.add(seqSet);
+        form.add(topRow);
         form.add(eval);
 
         // ===== 底部按钮 =====
@@ -251,26 +251,12 @@ public class AddPrimerDialog {
 
                     // v0.1.39：全体系异源二聚体（与其他所有引物相比）—— 计算 Top-5 并渲染
                     PrimerStore.evaluateOneAgainstAll(p);
-                    // 最差异源二聚体形状（#1）：展示全体系最危险伙伴的比对形状
+                    // v0.1.49：最差异源二聚体的排布可视化已并入下方 Top-5（第 1 条即最差），
+                    // 这里只保留指标行的 ΔG 数值显示，去掉重复的"最差异源二聚体"排布块
                     if (!p.topHetero.isEmpty()) {
                         HeteroHit h0 = p.topHetero.get(0);
-                        Primer partner = null;
-                        for (Primer q : PrimerStore.getPrimers()) {
-                            if (q.name != null && q.name.equals(h0.partnerName)
-                                    && q.seq != null && q.seq.length() >= 4) { partner = q; break; }
-                        }
-                        if (partner != null) {
-                            PrimerMetrics.DimerShape hSh = PrimerMetrics.dimerShape(p.seq, partner.seq);
-                            heteroArea.setText(hSh.valid
-                                    ? hSh.topLine + "\n" + hSh.bondLine + "\n" + hSh.botLine
-                                    : "（无法绘制比对）");
-                            heteroL.setText(h0.partnerName + " " + String.format("%.1f", h0.dg));
-                        } else {
-                            heteroArea.setText("（伙伴未载入序列）");
-                            heteroL.setText(h0.partnerName + " " + String.format("%.1f", h0.dg));
-                        }
+                        heteroL.setText(h0.partnerName + " " + String.format("%.1f", h0.dg));
                     } else {
-                        heteroArea.setText("（无其他引物可比对；导入/添加更多引物后显示全体系异源二聚体）");
                         heteroL.setText("—");
                     }
                     // Top-5 列表
@@ -282,11 +268,10 @@ public class AddPrimerDialog {
                             HeteroHit h = p.topHetero.get(k);
                             tb.append(String.format("%d. %-14s \u0394G=%6.1f  3'comp=%d%n",
                                     k + 1, h.partnerName, h.dg, h.c3));
-                            // v0.1.48：每条命中补一段碱基配对排布（与上面异源二聚体同样的可视化），
-                            // 只看名称+ΔG 无法直观知道到底哪几个碱基互补、3' 端是否咬住。
+                            // v0.1.48：每条命中补一段碱基配对排布，只看名称+ΔG 无法直观知道碱基互补位置
                             Primer pt = findPartnerWithSeq(h.partnerName);
                             if (pt == null) {
-                                tb.append("      （伙伴未载入序列，无法绘制比对）%n");
+                                tb.append("      （伙伴未载入序列，无法绘制比对）").append('\n');
                             } else {
                                 PrimerMetrics.DimerShape sh = PrimerMetrics.dimerShape(p.seq, pt.seq);
                                 if (sh.valid) {
@@ -318,7 +303,6 @@ public class AddPrimerDialog {
                     cur[0] = null;
                     display.run();
                     selfArea.setText("");
-                    heteroArea.setText("");
                     heteroL.setText("-");
                 }
             }
