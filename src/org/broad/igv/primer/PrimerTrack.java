@@ -223,7 +223,7 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("seq", "序列:" + (PrimerStore.showSeq ? "开" : "关"));
         defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
         defs.put("exp", "导出BED");
-        defs.put("imp", "导入BED");
+        defs.put("imp", "导入");
         defs.put("close", "关闭");
         for (java.util.Map.Entry<String, String> e : defs.entrySet()) {
             String id = e.getKey();
@@ -1151,7 +1151,7 @@ public class PrimerTrack extends AbstractTrack {
                 ExportUtils.exportReadFasta();
             }
         }));
-        menu.add(item("导入 BED（新建独立轨）", new Runnable() {
+        menu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
             public void run() {
                 ExportUtils.importBED();
             }

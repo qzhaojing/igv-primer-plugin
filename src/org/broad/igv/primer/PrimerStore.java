@@ -152,7 +152,8 @@ public class PrimerStore {
     public static void refreshSequence(Primer p) {
         Genome g = GenomeManager.getInstance().getCurrentGenome();
         if (g == null) {
-            p.seq = "";
+            // v0.1.52：不再无条件清空——从 FASTA 导入（或手填）的序列在没有加载基因组时应保留
+            if (p.seq == null) p.seq = "";
         } else {
             byte[] b = g.getSequence(p.chr, p.start, p.end);
             String fwd = b == null ? "" : new String(b).toUpperCase();

@@ -129,6 +129,27 @@ public class ExportUtils {
 
     // ---------- 2) 引物序列 ----------
 
+    /**
+     * v0.1.52：header 补齐还原所需的全部元信息（分组|g / 配对边|p / 颜色|c / 布局行|r / 测序长度），
+     * 使导出的 FASTA 也能被 importBED() 完整还原成图（与 BED 等价的自包含格式）。
+     * 显示信息保持不变，新增段追加在末尾，旧格式文件仍可被解析。
+     */
+    private static String fastaHeader(Primer p, Integer row) {
+        StringBuilder h = new StringBuilder(">" + p.name + "|" + p.role
+                + "|" + p.rangeStr() + "|" + (p.strand == '+' ? "F" : "R")
+                + "|len=" + p.length()
+                + (Double.isNaN(p.tm) ? "" : "|Tm=" + String.format("%.1f", p.tm))
+                + (Double.isNaN(p.gc) ? "" : "|GC=" + String.format("%.0f%%", p.gc))
+                + (p.pass ? "" : "|FAIL"));
+        h.append("|read").append(p.readLen);
+        if (p.group != null && !p.group.isEmpty()) h.append("|g").append(p.group);
+        if (p.pairedWith != null && !p.pairedWith.isEmpty())
+            h.append("|p").append(String.join(";", p.pairedWith));
+        if (p.color != null && !p.color.isEmpty()) h.append("|c").append(p.color);
+        if (row != null) h.append("|r").append(row);
+        return h.toString();
+    }
+
     public static void exportPrimerFasta() {
         File f = pick(true, "primers.fasta", "FASTA 文件", "fa");
         if (f == null) return;
@@ -136,13 +157,12 @@ public class ExportUtils {
         try {
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
             int n = 0;
+            java.util.Map<Primer, Integer> rows = null;
+            try { rows = PrimerTrack.allScreenRows(); } catch (Throwable ignore) { }
             for (Primer p : PrimerStore.getPrimers()) {
                 String seq = primerSeq(p);
-                w.write(">" + p.name + "|" + p.role + "|" + p.rangeStr() + "|" + (p.strand == '+' ? "F" : "R")
-                        + "|len=" + p.length()
-                        + (Double.isNaN(p.tm) ? "" : "|Tm=" + String.format("%.1f", p.tm))
-                        + (Double.isNaN(p.gc) ? "" : "|GC=" + String.format("%.0f%%", p.gc))
-                        + (p.pass ? "" : "|FAIL"));
+                Integer row = (rows != null && rows.containsKey(p)) ? rows.get(p) : p.rowOverride;
+                w.write(fastaHeader(p, row));
                 w.newLine();
                 for (int i = 0; i < seq.length(); i += 60) {
                     w.write(seq.substring(i, Math.min(seq.length(), i + 60)));
@@ -151,7 +171,8 @@ public class ExportUtils {
                 n++;
             }
             w.close();
-            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath());
+            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath()
+                    + "\n（header 内含坐标/分组/配对/布局行，可直接再用「导入」还原成图）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }
@@ -199,12 +220,35 @@ public class ExportUtils {
         }
     }
 
-    // ---------- 4) 导入 BED（支持多选，每个 BED 一个独立分组/行） ----------
+    /** 去掉常见后缀得到分组名（BED/FASTA 通用） */
+    private static String stripExt(String filename) {
+        return filename.replaceAll("(?i)\\.(bed|fa|fasta|fna|fas|seq|txt)$", "");
+    }
+
+    /** 嗅探：首条非空行以 '>' 开头即 FASTA，否则按 BED 处理 */
+    private static boolean looksLikeFasta(File f) {
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new FileReader(f));
+            String line;
+            while ((line = r.readLine()) != null) {
+                String s = line.trim();
+                if (s.isEmpty()) continue;
+                return s.startsWith(">");
+            }
+        } catch (Exception ignore) {
+        } finally {
+            if (r != null) try { r.close(); } catch (Exception ignore) { }
+        }
+        return false;
+    }
+
+    // ---------- 4) 导入 BED / FASTA（多选，每个文件一个独立分组/轨） ----------
 
     public static void importBED() {
         JFileChooser fc = new JFileChooser(lastDir);
         fc.setMultiSelectionEnabled(true);
-        fc.setFileFilter(new FileNameExtensionFilter("BED 文件", "bed"));
+        fc.setFileFilter(new FileNameExtensionFilter("BED / FASTA 文件", "bed", "fa", "fasta", "fna", "fas", "txt"));
         int r = fc.showOpenDialog(null);
         if (r != JFileChooser.APPROVE_OPTION) return;
         File[] fs = fc.getSelectedFiles();
@@ -212,24 +256,30 @@ public class ExportUtils {
         lastDir = fs[0].getParentFile();
         try {
             StringBuilder msg = new StringBuilder();
-            int total = 0;
+            int total = 0, skipped = 0;
             for (File f : fs) {
-                // 分组名 = 文件名（去 .bed 后缀）；每个 BED 一个独立分组 → 一条独立引物轨
-                String group = f.getName().replaceAll("(?i)\\.bed$", "");
+                // 分组名 = 文件名（去后缀）；每个文件一个独立分组 → 一条独立引物轨
+                String group = stripExt(f.getName());
                 List<Primer> list = new ArrayList<Primer>();
-                int n = parseBED(f, group, list);
-                if (n == 0) continue;
+                // v0.1.52：同一入口同时支持 BED 与 FASTA，按内容嗅探分发
+                int n = looksLikeFasta(f) ? parseFASTA(f, group, list) : parseBED(f, group, list);
+                if (n == 0) {
+                    skipped++;
+                    continue;
+                }
                 PrimerPlugin.ensureTrackForGroup(group);   // 空轨认领 / 否则新建独立轨
                 PrimerStore.addAll(list);
                 total += n;
                 msg.append(f.getName()).append(" → ").append(n).append(" 条（独立轨：「").append(group).append("」）\n");
             }
             if (total == 0) {
-                JOptionPane.showMessageDialog(null, "未解析到有效 BED 行（需 ≥6 列）");
+                JOptionPane.showMessageDialog(null, "未解析到有效引物：\n"
+                        + "• BED 需 ≥6 列\n• FASTA header 需含区间（如 |chr1:1001-1020|）");
                 return;
             }
             PrimerStore.refreshAll();
-            JOptionPane.showMessageDialog(null, "已导入 " + total + " 条引物（每个 BED 独立成轨，可分别编辑/导出/关闭）：\n" + msg);
+            String tail = skipped > 0 ? ("\n另有 " + skipped + " 个文件无有效引物（缺少坐标信息）") : "";
+            JOptionPane.showMessageDialog(null, "已导入 " + total + " 条引物（每个文件独立成轨，可分别编辑/导出/关闭）：\n" + msg + tail);
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导入失败: " + ex.getMessage());
         }
@@ -315,6 +365,101 @@ public class ExportUtils {
         postProcessLegacyGroups(legacyGroupMembers);   // 旧 |a 组 → F-R 边
         sanitizeEdges(out);                            // 校验所有边（跨染色体/跨度过大/无法成产物 → 剥离）
         return n;
+    }
+
+    // ---------- FASTA 导入（v0.1.52：header 含完整元信息时可完整还原成图） ----------
+
+    /** FASTA 单条记录的中间态 */
+    private static class FastaRec {
+        String name, role = "R1", chr = null, color = null, group = null;
+        int start = -1, end = -1, readLen = 50, row = -1;
+        char strand = '+';
+        java.util.List<String> partners = new ArrayList<String>();
+        StringBuilder seq = new StringBuilder();
+    }
+
+    /**
+     * 解析本插件导出的引物 FASTA。header 形如：
+     *   &gt;P039|R1|chr1:1001-1020|F|len=20|Tm=60.0|GC=50%|read50|gprimers|pP040|c008000|r0
+     * 坐标段为必填（无坐标的野生 FASTA 会被跳过）；|g|p|c|r 用于还原分组/配对边/颜色/布局行。
+     */
+    private static int parseFASTA(File f, String group, List<Primer> out) throws Exception {
+        BufferedReader r = new BufferedReader(new FileReader(f));
+        int n = 0;
+        try {
+            FastaRec cur = null;
+            String line;
+            while ((line = r.readLine()) != null) {
+                String s = line.trim();
+                if (s.isEmpty()) continue;
+                if (s.startsWith(">")) {
+                    if (cur != null && flushFasta(cur, group, out)) n++;
+                    cur = parseFastaHeader(s.substring(1).trim());
+                } else if (cur != null) {
+                    cur.seq.append(s.toUpperCase().replaceAll("\\s+", ""));
+                }
+            }
+            if (cur != null && flushFasta(cur, group, out)) n++;
+        } finally {
+            r.close();
+        }
+        sanitizeEdges(out);   // 同 BED：跨染色体/跨度过大/悬空伙伴 → 剥离
+        return n;
+    }
+
+    private static FastaRec parseFastaHeader(String h) {
+        FastaRec rec = new FastaRec();
+        // 兼容两种分隔：本插件用 '|'；野生 FASTA 多为空格
+        String[] segs = h.contains("|") ? h.split("\\|") : h.split("\\s+");
+        for (int i = 0; i < segs.length; i++) {
+            String seg = segs[i].trim();
+            if (seg.isEmpty()) continue;
+            if (i == 0 && rec.name == null && !seg.matches(".+:\\d+-\\d+")) { rec.name = seg; continue; }
+            // 坐标段 chr:start-end（rangeStr 口径：start 为 1-based，end 为 exclusive）
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("^(.+):(\\d+)-(\\d+)$").matcher(seg);
+            if (m.matches()) {
+                rec.chr = m.group(1);
+                rec.start = Integer.parseInt(m.group(2)) - 1;
+                rec.end = Integer.parseInt(m.group(3));
+                continue;
+            }
+            if (seg.equals("F") || seg.equals("+")) { rec.strand = '+'; continue; }
+            if (seg.equals("R") || seg.equals("-")) { rec.strand = '-'; continue; }
+            if (seg.startsWith("read") && seg.length() > 4) {
+                try { rec.readLen = Integer.parseInt(seg.substring(4)); } catch (Exception ignore) { }
+            } else if (seg.startsWith("g") && seg.length() > 1) {
+                rec.group = seg.substring(1);
+            } else if (seg.startsWith("p") && seg.length() > 1) {
+                for (String nm : seg.substring(1).split(";")) {
+                    nm = nm.trim();
+                    if (!nm.isEmpty()) rec.partners.add(nm);
+                }
+            } else if (seg.startsWith("c") && seg.length() > 1) {
+                rec.color = seg.substring(1);
+            } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
+                try { rec.row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) { }
+            } else if (i == 1 && rec.role == null || (i == 1 && !seg.contains("="))) {
+                rec.role = seg;   // 第 2 段且不像 key=value → 视为角色
+            }
+        }
+        if (rec.role == null) rec.role = "R1";
+        return rec;
+    }
+
+    /** 落一条记录为 Primer，成功返回 true（无坐标 → false，跳过） */
+    private static boolean flushFasta(FastaRec h, String group, List<Primer> out) {
+        if (h == null || h.name == null || h.chr == null || h.end <= h.start) return false;
+        Primer p = new Primer(h.name, h.chr, h.start, h.end, h.strand, h.role, h.readLen, null);
+        p.group = (h.group != null && !h.group.isEmpty()) ? h.group : group;
+        if (h.color != null) p.color = h.color;
+        if (h.row >= 0) p.rowOverride = h.row;
+        if (h.seq.length() > 0) p.seq = h.seq.toString();   // 未加载基因组时保住序列（有基因组仍以参考为准）
+        out.add(p);
+        if (!h.partners.isEmpty()) {
+            p.pairedWith = new java.util.LinkedHashSet<String>();
+            p.pairedWith.addAll(h.partners);
+        }
+        return true;
     }
 
     /** 在 out 中找到名为 ownName 的引物，把一个伙伴名 partner 记入其 pairedWith（容错：找不到则忽略）。 */
