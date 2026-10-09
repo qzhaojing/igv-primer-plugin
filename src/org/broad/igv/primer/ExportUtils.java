@@ -267,6 +267,11 @@ public class ExportUtils {
                     skipped++;
                     continue;
                 }
+                int replaced = PrimerStore.removeGroup(group);   // v0.1.53：同组重导入=替换，防止同名引物叠加画重影
+                if (replaced > 0) {
+                    msg.append("  （分组「").append(group).append("」已存在 ").append(replaced)
+                       .append(" 条旧引物，已替换）\n");
+                }
                 PrimerPlugin.ensureTrackForGroup(group);   // 空轨认领 / 否则新建独立轨
                 PrimerStore.addAll(list);
                 total += n;
@@ -325,7 +330,10 @@ public class ExportUtils {
                     if (seg.startsWith("read") && seg.length() > 4) {
                         try { readLen = Integer.parseInt(seg.substring(4)); } catch (Exception ignore) {}
                     } else if (seg.startsWith("g") && seg.length() > 1) {
-                        g = seg.substring(1);
+                        // v0.1.53：分组以导入入口传入的（文件名/轨）为准，行内 |g 仅在无分组时采纳。
+                        // 否则 primers091.bed 内嵌 |gprimers 会把引物全塞进旧 "primers" 组：
+                        // 新建的 primers091 轨空空如也（看似导入失败），同名引物还叠加进旧组。
+                        if (group == null) g = seg.substring(1);
                     } else if (seg.startsWith("a") && seg.length() > 1) {
                         aId = seg.substring(1);
                     } else if (seg.startsWith("c") && seg.length() > 1) {
