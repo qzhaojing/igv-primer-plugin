@@ -298,7 +298,8 @@ public class ExportUtils {
                 String group = stripExt(f.getName());
                 List<Primer> list = new ArrayList<Primer>();
                 // v0.1.52：同一入口同时支持 BED 与 FASTA，按内容嗅探分发
-                int n = looksLikeFasta(f) ? parseFASTA(f, group, list) : parseBED(f, group, list);
+                boolean[] plain = new boolean[1];
+                int n = looksLikeFasta(f) ? parseFASTA(f, group, list) : parseBED(f, group, list, plain);
                 if (n == 0) {
                     skipped++;
                     continue;
@@ -311,14 +312,20 @@ public class ExportUtils {
                 PrimerPlugin.ensureTrackForGroup(group);   // 空轨认领 / 否则新建独立轨
                 PrimerStore.addAll(list);
                 // v0.1.54：记住来源文件，之后「保存」直接回写这个文件（脏标记随之清零）
+                // v0.1.55：普通 BED 降级加载 → 故意不 markSaved，保持脏标记，提示用户重新保存成标准格式
                 PrimerTrack tk = PrimerPlugin.getTrackForGroup(group);
-                if (tk != null) tk.markSaved(f);
+                if (tk != null && !plain[0]) tk.markSaved(f);
                 total += n;
                 msg.append(f.getName()).append(" → ").append(n).append(" 条（独立轨：「").append(group).append("」）\n");
+                if (plain[0]) {
+                    msg.append("  ⚠ 该文件不是引物标准格式（name 列无方向/配对等标记）：已按前3列坐标加载、")
+                       .append("第4列作为引物名称（缺省自动编号）、方向默认全部正向。")
+                       .append("编辑后请点「保存」或「另存为」，即写成带完整标记的新格式。\n");
+                }
             }
             if (total == 0) {
                 JOptionPane.showMessageDialog(null, "未解析到有效引物：\n"
-                        + "• BED 需 ≥6 列\n• FASTA header 需含区间（如 |chr1:1001-1020|）");
+                        + "• BED 需 ≥3 列（chrom start end [name ...]）\n• FASTA header 需含区间（如 |chr1:1001-1020|）");
                 return;
             }
             PrimerStore.refreshAll();
@@ -332,28 +339,39 @@ public class ExportUtils {
     /** 解析单个 BED，追加到 out，返回解析条数。group 写入每条引物；内嵌 |p伙伴 解析为本引物的边（pairedWith）；
      *  旧格式 |a组 在解析后按 F-R 重建边（见 postProcessLegacyGroups）；|r行号 恢复布局行。 */
     private static int parseBED(File f, String group, List<Primer> out) throws Exception {
+        return parseBED(f, group, out, null);
+    }
+
+    /** plainOut[0]=true 表示文件是「普通 BED」（name 列无引物标记 |），已按降级规则加载：前3列坐标、
+     *  第4列名称（缺省自动编号）、方向缺省正向；调用方据此提示用户重新保存成标准引物格式。 */
+    private static int parseBED(File f, String group, List<Primer> out, boolean[] plainOut) throws Exception {
         BufferedReader r = new BufferedReader(new FileReader(f));
-        try { return parseLines(r, group, out); } finally { r.close(); }
+        try { return parseLines(r, group, out, plainOut); } finally { r.close(); }
     }
 
     /** 从 BED 文本解析（v0.1.47：session 恢复用）。格式与文件版一致；解析失败返回 0。 */
     public static int parseBEDText(String text, String group, List<Primer> out) {
         try {
-            return parseLines(new BufferedReader(new StringReader(text)), group, out);
+            return parseLines(new BufferedReader(new StringReader(text)), group, out, null);
         } catch (Exception ignore) {
             return 0;
         }
     }
 
-    private static int parseLines(BufferedReader r, String group, List<Primer> out) throws Exception {
+    private static int parseLines(BufferedReader r, String group, List<Primer> out, boolean[] plainOut) throws Exception {
         int n = 0;
         String line;
         java.util.List<Primer> legacyGroupMembers = new java.util.ArrayList<Primer>();
         while ((line = r.readLine()) != null) {
             if (line.startsWith("track") || line.startsWith("#") || line.trim().isEmpty()) continue;
             String[] t = line.split("\t");
-            if (t.length < 6) continue;
-            String name = t[3];
+            // v0.1.55：普通 BED 降级导入——≥3 列即接受（前3列=坐标），第4列=名称（缺省自动编号），
+            // 方向取第6列（无该列时默认正向 '+'）。name 无 '|' 标记 → plainOut[0]=true，由调用方提示转格式。
+            if (t.length < 3) continue;
+            String name = t.length > 3 ? t[3].trim() : "";
+            boolean plain = name.isEmpty() || name.indexOf('|') < 0;
+            if (plain && plainOut != null) plainOut[0] = true;
+            if (plain && name.isEmpty()) name = group + "_" + (n + 1);   // 无名称自动编号（组内唯一）
             String role = "R1";
             int readLen = 50;
             String g = group;   // 默认：来源文件名；BED 内嵌 |gXXX 时优先
@@ -396,8 +414,10 @@ public class ExportUtils {
                     role = parts[1];
                 }
             }
+            // 方向：有第6列按其值（'-' 为反向），普通 BED 缺列时默认正向 '+'
+            String st = t.length > 5 ? t[5].trim() : "+";
             Primer p = new Primer(name, t[0], Integer.parseInt(t[1]), Integer.parseInt(t[2]),
-                    "+".equals(t[5]) ? '+' : '-', role, readLen, null);
+                    "-".equals(st) ? '-' : '+', role, readLen, null);
             p.group = g;
             p.color = color;
             if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
