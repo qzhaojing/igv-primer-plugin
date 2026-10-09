@@ -68,6 +68,42 @@ public class ExportUtils {
         }
     }
 
+    // ---------- v0.1.54：保存回来源文件 / 另存为 ----------
+
+    /** 保存本轨到来源文件；无来源文件时自动转为「另存为」。 */
+    public static void saveTrack(PrimerTrack t) {
+        if (t == null) return;
+        if (t.sourceFile == null) { saveTrackAs(t); return; }
+        writeTrackTo(t, t.sourceFile);
+    }
+
+    /** 本轨另存为新文件（选完路径即成为本轨的来源文件，之后「保存」直接回写它）。 */
+    public static void saveTrackAs(PrimerTrack t) {
+        if (t == null) return;
+        java.util.List<Primer> list = PrimerStore.getPrimersByGroup(t.getGroup());
+        if (list.isEmpty()) { JOptionPane.showMessageDialog(null, "本轨没有可保存的引物。"); return; }
+        String def = (t.getGroup() == null ? "primers" : t.getGroup()) + ".bed";
+        File f = pick(true, def, "BED 文件", "bed");
+        if (f == null) return;
+        if (!f.getName().toLowerCase().endsWith(".bed")) f = new File(f.getAbsolutePath() + ".bed");
+        if (!confirmOverwrite(f)) return;
+        writeTrackTo(t, f);
+    }
+
+    /** 静默写盘 + 更新轨的保存状态（不弹成功框时用） */
+    private static void writeTrackTo(PrimerTrack t, File f) {
+        java.util.List<Primer> list = PrimerStore.getPrimersByGroup(t.getGroup());
+        if (list.isEmpty()) { JOptionPane.showMessageDialog(null, "本轨没有可保存的引物。"); return; }
+        try {
+            writeBED(f, list);
+            t.markSaved(f);
+            PrimerStore.refresh();
+            JOptionPane.showMessageDialog(null, "已保存 " + list.size() + " 条引物到：\n" + f.getAbsolutePath());
+        } catch (Exception ex) {
+            JOptionPane.showMessageDialog(null, "保存失败: " + ex.getMessage());
+        }
+    }
+
     /** 静默写 BED（自动保存用，不弹窗）。格式与 exportBED 一致，可被 parseBED 完整还原（配对组/颜色/测序长度）。 */
     public static synchronized void writeBED(File f) throws Exception {
         writeBED(f, PrimerStore.getPrimers());
@@ -274,6 +310,9 @@ public class ExportUtils {
                 }
                 PrimerPlugin.ensureTrackForGroup(group);   // 空轨认领 / 否则新建独立轨
                 PrimerStore.addAll(list);
+                // v0.1.54：记住来源文件，之后「保存」直接回写这个文件（脏标记随之清零）
+                PrimerTrack tk = PrimerPlugin.getTrackForGroup(group);
+                if (tk != null) tk.markSaved(f);
                 total += n;
                 msg.append(f.getName()).append(" → ").append(n).append(" 条（独立轨：「").append(group).append("」）\n");
             }

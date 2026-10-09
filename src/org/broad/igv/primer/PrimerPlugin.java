@@ -102,6 +102,18 @@ public class PrimerPlugin implements IGVPlugin {
         ensureFallbackTrack();
     }
 
+    /** v0.1.54：按分组取轨（无则返回 null）。 */
+    public static PrimerTrack getTrackForGroup(String group) {
+        if (group == null) {
+            for (PrimerTrack t : knownTracks) if (t.getGroup() == null) return t;
+            return null;
+        }
+        PrimerTrack t = groupTracks.get(group);
+        if (t != null) return t;
+        for (PrimerTrack k : knownTracks) if (group.equals(k.getGroup())) return k;   // 兜底：注册表未同步时
+        return null;
+    }
+
     /** v0.1.47：仅从注册表注销该轨（由 session 还原接管布局），不做 IGV 面板移除、也不触发兜底新建。 */
     public static synchronized void forgetTrack(PrimerTrack t) {
         if (t == null) return;

@@ -12,6 +12,7 @@ import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.geom.GeneralPath;
+import java.io.File;
 import java.util.List;
 
 /**
@@ -45,7 +46,7 @@ public class PrimerTrack extends AbstractTrack {
         // 中文名在 Windows 上会被写成非 UTF-8 字节，open session 时解析报 MalformedByteSequenceException 并丢失本轨。
         // 来源文件名（可能含中文）只画在轨内 caption，不写进轨名。
         this.group = group;
-        setName("Primers");
+        setName("Primers");   // 具体分组名在首次渲染时由 applyName() 写入左侧轨名面板
         setColor(new Color(0, 128, 0));
         setHeight(60);
         ALL.add(this);
@@ -66,6 +67,37 @@ public class PrimerTrack extends AbstractTrack {
 
     /** 本轨绑定的分组（null=手动添加轨）；供 PrimerPlugin 注册表查询 */
     public String getGroup() { return group; }
+
+    // ---------- v0.1.54：来源文件 + 脏标记（可直接回写原始 BED） ----------
+    /** 本轨引物的来源文件（导入/另存时记录）；null = 尚未关联文件 */
+    public java.io.File sourceFile;
+    private String savedSig;      // 上次保存时的内容签名；null = 未保存过
+
+    /** 当前内容签名（覆盖位置/链/分组/配对边/颜色/行号/测序长度/名称） */
+    private String currentSig() {
+        StringBuilder sb = new StringBuilder();
+        for (Primer p : PrimerStore.getPrimersByGroup(group)) {
+            sb.append(p.name).append(';').append(p.chr).append(':').append(p.start).append('-').append(p.end)
+              .append(p.strand).append(';').append(p.role).append(';').append(p.readLen).append(';')
+              .append(p.color == null ? "" : p.color).append(';').append(p.rowOverride).append(';')
+              .append(p.pairedWith == null ? "" : new java.util.TreeSet<String>(p.pairedWith).toString())
+              .append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** 本轨是否有未保存的改动（空轨且从未保存过不算脏） */
+    public boolean isDirty() {
+        String c = currentSig();
+        if (savedSig == null) return !c.isEmpty();
+        return !c.equals(savedSig);
+    }
+
+    /** 记为已保存（保存/导入后立即调用） */
+    public void markSaved(File f) { sourceFile = f; savedSig = currentSig(); }
+
+    /** 工具条/菜单展示名：有未保存改动时加 * */
+    public String saveStateLabel() { return isDirty() ? " *" : ""; }
 
     public void update() {
         // 通知面板高度等变化（简单起见高度固定）
@@ -203,12 +235,19 @@ public class PrimerTrack extends AbstractTrack {
             g.drawString(b.label, b.rect.x + (b.rect.width - tw) / 2, b.rect.y + b.rect.height - 4);
         }
         drawToolbarBoxes(g);   // 绘制两个圆角参数框（含文本输入框与设置按钮）
-        // v0.1.36：工具条右侧画本轨来源 caption（分组名/手动添加），用于区分多条独立引物轨
-        g.setFont(g.getFont().deriveFont(10f));
-        String cap = groupLabel();
-        int capW = g.getFontMetrics(g.getFont()).stringWidth(cap);
-        g.setColor(new Color(90, 90, 90));
-        g.drawString(cap, bar.x + bar.width - capW - 8, bar.y + bar.height - 9);
+        // v0.1.54：来源名改由左侧 IGV 轨名面板显示（getName），此处不再在右侧重复画 caption
+        applyName();
+    }
+
+    /** v0.1.54：把来源分组名写进左侧轨名面板；有未保存改动时追加 *。
+     *  注意：AbstractTrack.name 会被 JAXB 序列化进 session XML，非 ASCII（中文文件名）在 Windows
+     *  上会写成非 UTF-8 字节 → open session 报 MalformedByteSequenceException，故非 ASCII 一律回退 "Primers"。 */
+    private String lastName;
+    private void applyName() {
+        String lbl = groupLabel();
+        for (int i = 0; i < lbl.length(); i++) if (lbl.charAt(i) > 127) { lbl = "Primers"; break; }
+        String nm = lbl + (isDirty() ? " *" : "");
+        if (!nm.equals(lastName)) { lastName = nm; setName(nm); }
     }
 
     /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
@@ -224,6 +263,8 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
         defs.put("exp", "导出BED");
         defs.put("imp", "导入");
+        defs.put("save", "保存" + (isDirty() ? " *" : ""));   // v0.1.54：回写源文件；无来源文件时等同另存为
+        defs.put("saveas", "另存为");
         defs.put("close", "关闭");
         for (java.util.Map.Entry<String, String> e : defs.entrySet()) {
             String id = e.getKey();
@@ -1131,6 +1172,14 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
+        // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为
+        final String srcTip = (sourceFile == null) ? "（未关联文件 → 将弹另存为）" : ("（" + sourceFile.getName() + "）");
+        menu.add(item("保存本轨" + (isDirty() ? " ●有改动" : "") + " " + srcTip, new Runnable() {
+            public void run() { ExportUtils.saveTrack(PrimerTrack.this); }
+        }));
+        menu.add(item("本轨另存为...", new Runnable() {
+            public void run() { ExportUtils.saveTrackAs(PrimerTrack.this); }
+        }));
         menu.add(item("导出本轨 BED（方向+颜色+测序长度）", new Runnable() {
             public void run() {
                 ExportUtils.exportBED(PrimerTrack.this.group);   // 仅导出本轨分组
@@ -1307,6 +1356,10 @@ public class PrimerTrack extends AbstractTrack {
             ExportUtils.exportBED(this.group);   // 仅导出本轨分组的引物
         } else if ("imp".equals(id)) {
             ExportUtils.importBED();
+        } else if ("save".equals(id)) {
+            ExportUtils.saveTrack(this);      // v0.1.54：回写来源文件（无则弹另存为）
+        } else if ("saveas".equals(id)) {
+            ExportUtils.saveTrackAs(this);
         } else if ("close".equals(id)) {
             // v0.1.36：关闭本轨 = 删除该分组全部引物 + 移除轨（带确认）
             int n = PrimerStore.countGroup(this.group);
