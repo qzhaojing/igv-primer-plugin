@@ -22,6 +22,10 @@ import java.util.Map;
  * 打开时自动读取 PrimerEditTool 的鼠标选区（空白处拖拽掠过区间）预填 chr 与起止。
  * 坐标输入均为 IGV 惯例 1-based inclusive。
  *
+ * v0.1.59：无鼠标选区时回退自动填充当前 IGV 视口（chr+range）；起止倒转自动交换；
+ * 产物区间长于产物上限时自动放大上限（否则 primer3 必无解）；新增可折叠「高级参数」
+ * 面板（盐浓度/dNTP/引物浓度、二聚体/发夹阈值、多聚X/N/GC钳，留空=primer3 默认）。
+ *
  * 参数只暴露常用项（长度/Tm/GC/产物范围/返回对数），预设一键填充；高级参数走默认值。
  */
 public class Primer3Dialog {
@@ -89,6 +93,41 @@ public class Primer3Dialog {
         return new int[]{ts, te};
     }
 
+    /**
+     * v0.1.59：当前 IGV 视口（主 frame）的 chr + 0-based [start, end)。
+     * 无基因组/无实例时返回 null（headless 或未初始化场景安全）。
+     */
+    public static String[] currentViewRange() {
+        try {
+            org.broad.igv.ui.panel.ReferenceFrame f =
+                    IGV.getInstance().getSession().getReferenceFrame();
+            if (f == null || f.getChrName() == null) return null;
+            int s = (int) f.getOrigin();
+            int e = (int) Math.ceil(f.getEnd());
+            if (e <= s || s < 0) return null;
+            return new String[]{f.getChrName(), String.valueOf(s), String.valueOf(e)};
+        } catch (Throwable ignore) {
+            return null;
+        }
+    }
+
+    /**
+     * v0.1.59：区间超长时取中段截断（0-based，end exclusive）。
+     * 用于把整条染色体级的视口缩成可设计的区间；不超过 maxLen 原样返回。
+     */
+    public static int[] clampMid(int s0, int e0, int maxLen) {
+        if (e0 - s0 <= maxLen) return new int[]{s0, e0};
+        int mid = (s0 + e0) / 2;
+        int ns = Math.max(s0, mid - maxLen / 2);
+        return new int[]{ns, ns + maxLen};
+    }
+
+    /** v0.1.59：高级参数收集——文本框非空才写入（空 = 用 primer3 自己的默认值）。 */
+    public static void putIfPresent(Map<String, String> params, String tag, JTextField f) {
+        String v = f.getText().trim();
+        if (!v.isEmpty()) params.put(tag, v);
+    }
+
     private static class Dlg extends JDialog {
         private final int mode;   // MODE_PAIR / MODE_LEFT / MODE_RIGHT
         private final JComboBox modeBox = new JComboBox(new String[]{"简单：指定产物区间", "高级：分别指定上/下游区"});
@@ -114,9 +153,24 @@ public class Primer3Dialog {
         private final JTextField prodMinF = new JTextField("100", 6);
         private final JTextField prodMaxF = new JTextField("300", 6);
         private final JTextField numRetF = new JTextField("5", 4);
+        // v0.1.59：高级参数（均可空=primer3 默认值；实战中最常导致无解/结果漂移的项）
+        private final JTextField saltMonoF = new JTextField("50", 5);    // PRIMER_SALT_MONOVALENT mM
+        private final JTextField saltDiF = new JTextField("1.5", 5);     // PRIMER_SALT_DIVALENT mM
+        private final JTextField dntpF = new JTextField("0.6", 5);       // PRIMER_DNTP_CONC mM
+        private final JTextField dnaConcF = new JTextField("50", 5);     // PRIMER_DNA_CONC nM
+        private final JTextField complAnyF = new JTextField("", 5);      // PRIMER_MAX_COMPL_ANY_TH
+        private final JTextField complEndF = new JTextField("", 5);      // PRIMER_MAX_COMPL_END_TH
+        private final JTextField hairpinF = new JTextField("", 5);       // PRIMER_MAX_HAIRPIN_TH
+        private final JTextField selfAnyF = new JTextField("", 5);       // PRIMER_MAX_SELF_ANY_TH
+        private final JTextField selfEndF = new JTextField("", 5);       // PRIMER_MAX_SELF_END_TH
+        private final JTextField polyXF = new JTextField("", 5);         // PRIMER_MAX_POLY_X
+        private final JTextField nsF = new JTextField("", 5);            // PRIMER_MAX_NS_ACCEPTED
+        private final JTextField gcClampF = new JTextField("", 5);       // PRIMER_GC_CLAMP 0/1
+        private final JTextField maxEndGcF = new JTextField("", 5);      // PRIMER_MAX_END_GC
 
         private final JPanel simplePanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         private final JPanel advPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
+        private final JPanel advParams = new JPanel(new GridLayout(3, 10, 4, 2));  // v0.1.59 高级参数（默认折叠）
         private final JLabel statusL = new JLabel(" ");
 
         Dlg(int mode) {
@@ -130,8 +184,13 @@ public class Primer3Dialog {
             top.add(new JLabel("模式:"));
             top.add(modeBox);
             top.add(new JLabel("染色体:"));
-            // v0.1.57：优先用鼠标选区预填 chr 与起止；无选区退回上次操作的 chr
+            // v0.1.59：优先鼠标选区；无选区回退当前 IGV 视口（自动填充，减少手工输入）
             String[] sel = PrimerEditTool.currentSelection();
+            boolean fromView = false;
+            if (sel == null) {
+                sel = currentViewRange();
+                fromView = true;
+            }
             chrF.setText(sel != null ? sel[0] : (PrimerStore.lastChr == null ? "" : PrimerStore.lastChr));
             top.add(chrF);
             top.add(new JLabel("分组名:"));
@@ -169,10 +228,27 @@ public class Primer3Dialog {
                 prodMaxF.setEnabled(false);
             }
 
-            // v0.1.57：鼠标选区预填（1-based inclusive 显示）
+            // v0.1.59：鼠标选区/视口预填（1-based inclusive 显示）。
+            // 起止倒转自动交换；超长区间取中段（单引物 2kb：INCLUDED 搜索空间过大 primer3 慢；
+            // 成对 19kb：再大产物无实际意义，且留出模板 pad 余量避开 20kb 模板上限）
             if (sel != null) {
-                tStartF.setText(String.valueOf(Integer.parseInt(sel[1]) + 1));
-                tEndF.setText(String.valueOf(Integer.parseInt(sel[2])));
+                int s0 = Integer.parseInt(sel[1]);
+                int e0 = Integer.parseInt(sel[2]);
+                if (s0 > e0) { int t = s0; s0 = e0; e0 = t; }
+                int maxLen = single ? 2000 : 19000;
+                int[] c = clampMid(s0, e0, maxLen);
+                if (c[1] - c[0] < e0 - s0) {
+                    statusL.setText("<html><font color='gray'>已按当前"
+                            + (fromView ? "视图" : "选中区域") + "填充 " + s0 + 1 + "-" + e0
+                            + "（" + (e0 - s0) + "bp 过长，取中段 " + maxLen + "bp）</font></html>");
+                } else if (fromView) {
+                    statusL.setText("<html><font color='gray'>已按当前视图自动填充 "
+                            + chrF.getText() + ":" + (s0 + 1) + "-" + e0 + "</font></html>");
+                }
+                s0 = c[0];
+                e0 = c[1];
+                tStartF.setText(String.valueOf(s0 + 1));
+                tEndF.setText(String.valueOf(e0));
             }
 
             // ---- 参数网格 ----
@@ -203,12 +279,59 @@ public class Primer3Dialog {
             presets.add(btn("Sanger", new String[]{"18", "22", "27", "56", "60", "64", "35", "65", "300", "800", "5"}));
             presets.add(btn("克隆", new String[]{"20", "25", "30", "58", "62", "66", "40", "60", "500", "1500", "5"}));
 
+            // ---- v0.1.59：高级参数（默认折叠；留空=primer3 默认值） ----
+            final JButton advToggle = new JButton("高级参数 ▸（盐浓度 / 二聚体阈值 / 组成约束，留空=primer3 默认）");
+            advToggle.setMargin(new Insets(2, 6, 2, 6));
+            // 行1：Tm 计算基础（盐/dNTP/引物浓度）
+            advParams.add(new JLabel("盐 mono mM:", SwingConstants.RIGHT)); advParams.add(saltMonoF);
+            advParams.add(new JLabel("盐 di mM:", SwingConstants.RIGHT));  advParams.add(saltDiF);
+            advParams.add(new JLabel("dNTP mM:", SwingConstants.RIGHT));   advParams.add(dntpF);
+            advParams.add(new JLabel("引物 nM:", SwingConstants.RIGHT));   advParams.add(dnaConcF);
+            advParams.add(new JLabel("")); advParams.add(new JLabel(""));
+            // 行2：二聚体/发夹阈值（调低更严，无解时可适当调高）
+            advParams.add(new JLabel("二聚ANY:", SwingConstants.RIGHT));  advParams.add(complAnyF);
+            advParams.add(new JLabel("二聚END:", SwingConstants.RIGHT));  advParams.add(complEndF);
+            advParams.add(new JLabel("发卡:", SwingConstants.RIGHT));     advParams.add(hairpinF);
+            advParams.add(new JLabel("自连ANY:", SwingConstants.RIGHT));  advParams.add(selfAnyF);
+            advParams.add(new JLabel("自连END:", SwingConstants.RIGHT));  advParams.add(selfEndF);
+            // 行3：组成约束
+            advParams.add(new JLabel("多聚X:", SwingConstants.RIGHT));    advParams.add(polyXF);
+            advParams.add(new JLabel("N个数:", SwingConstants.RIGHT));    advParams.add(nsF);
+            advParams.add(new JLabel("GC钳0/1:", SwingConstants.RIGHT));  advParams.add(gcClampF);
+            advParams.add(new JLabel("3'GC数:", SwingConstants.RIGHT));   advParams.add(maxEndGcF);
+            JButton advReset = new JButton("恢复默认");
+            advReset.setMargin(new Insets(2, 6, 2, 6));
+            advReset.addActionListener(new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
+                    saltMonoF.setText("50"); saltDiF.setText("1.5"); dntpF.setText("0.6"); dnaConcF.setText("50");
+                    complAnyF.setText(""); complEndF.setText(""); hairpinF.setText("");
+                    selfAnyF.setText(""); selfEndF.setText(""); polyXF.setText("");
+                    nsF.setText(""); gcClampF.setText(""); maxEndGcF.setText("");
+                }
+            });
+            advParams.add(advReset);
+            advParams.setVisible(false);
+            advToggle.addActionListener(new ActionListener() {
+                public void actionPerformed(ActionEvent e) {
+                    boolean show = !advParams.isVisible();
+                    advParams.setVisible(show);
+                    advToggle.setText(show
+                            ? "高级参数 ▾（盐浓度 / 二聚体阈值 / 组成约束，留空=primer3 默认）"
+                            : "高级参数 ▸（盐浓度 / 二聚体阈值 / 组成约束，留空=primer3 默认）");
+                    pack();
+                }
+            });
+            JPanel advWrap = new JPanel(new BorderLayout(0, 2));
+            advWrap.add(advToggle, BorderLayout.NORTH);
+            advWrap.add(advParams, BorderLayout.CENTER);
+
             JPanel form = new JPanel();
             form.setLayout(new BoxLayout(form, BoxLayout.Y_AXIS));
             form.add(top);
             form.add(regionPanel);
             form.add(presets);
             form.add(pg);
+            form.add(advWrap);
             form.add(statusL);
             add(form, BorderLayout.CENTER);
 
@@ -317,6 +440,29 @@ public class Primer3Dialog {
                 params.put("PRIMER_MAX_GC", String.valueOf(gcMax));
                 params.put("PRIMER_NUM_RETURN", String.valueOf(numRet));
 
+                // v0.1.59：高级参数（留空=primer3 默认，不写入）
+                putIfPresent(params, "PRIMER_SALT_MONOVALENT", saltMonoF);
+                putIfPresent(params, "PRIMER_SALT_DIVALENT", saltDiF);
+                putIfPresent(params, "PRIMER_DNTP_CONC", dntpF);
+                putIfPresent(params, "PRIMER_DNA_CONC", dnaConcF);
+                putIfPresent(params, "PRIMER_MAX_COMPL_ANY_TH", complAnyF);
+                putIfPresent(params, "PRIMER_MAX_COMPL_END_TH", complEndF);
+                putIfPresent(params, "PRIMER_MAX_HAIRPIN_TH", hairpinF);
+                putIfPresent(params, "PRIMER_MAX_SELF_ANY_TH", selfAnyF);
+                putIfPresent(params, "PRIMER_MAX_SELF_END_TH", selfEndF);
+                putIfPresent(params, "PRIMER_MAX_POLY_X", polyXF);
+                putIfPresent(params, "PRIMER_MAX_NS_ACCEPTED", nsF);
+                putIfPresent(params, "PRIMER_GC_CLAMP", gcClampF);
+                putIfPresent(params, "PRIMER_MAX_END_GC", maxEndGcF);
+
+                int s = i(tStartF, "区域起"), e = i(tEndF, "区域止");
+                // v0.1.59：起止倒转自动交换（手工输入/反向拖选常见，原来直接报"区域非法"）
+                if (s > e) {
+                    int t = s; s = e; e = t;
+                    tStartF.setText(String.valueOf(s));
+                    tEndF.setText(String.valueOf(e));
+                    statusL.setText("提示: 起止已倒转，自动交换为 " + s + "-" + e);
+                }
                 boolean adv = modeBox.getSelectedIndex() == 1;
                 boolean single = (mode != MODE_PAIR);
                 if (single) {
@@ -326,10 +472,18 @@ public class Primer3Dialog {
                 } else {
                     params.put("PRIMER_PICK_LEFT_PRIMER", "1");
                     params.put("PRIMER_PICK_RIGHT_PRIMER", "1");
+                    // v0.1.59：简单模式产物区间即 SEQUENCE_TARGET，primer3 要求产物覆盖 target，
+                    // target 长于产物上限时必然无解（截图高频场景）——自动放大上限并提示
+                    if (!adv) {
+                        int tLen = e - (s - 1);
+                        if (tLen > prodMax) {
+                            prodMax = tLen;
+                            statusL.setText("提示: 产物区间 " + tLen + "bp 超过原产物上限，已自动放大为 " + tLen + "bp");
+                        }
+                    }
                     params.put("PRIMER_PRODUCT_SIZE_RANGE", prodMin + "-" + prodMax);
                 }
 
-                int s = i(tStartF, "区域起"), e = i(tEndF, "区域止");
                 // 仅高级+成对才读上/下游区字段：单引物时 modeBox 禁用（永远简单模式），
                 // advPanel 隐藏且字段为空，无条件解析会抛「上游区起 不是有效整数」
                 int us = 0, ul = 0, ds = 0, dl = 0;

@@ -191,6 +191,27 @@ public class TestP3 {
         }
         check(threw2, "regionToTemplate 上游在右抛错");
 
+        // 12. v0.1.59：clampMid 区间截断（视口过大时取中段）
+        int[] c1 = Primer3Dialog.clampMid(1000, 1500, 2000);
+        check(c1[0] == 1000 && c1[1] == 1500, "clampMid 短区间原样");
+        int[] c2 = Primer3Dialog.clampMid(0, 500000, 2000);
+        check(c2[1] - c2[0] == 2000 && c2[0] == 249000 && c2[1] == 251000, "clampMid 50万bp视口取中段2kb (" + c2[0] + "-" + c2[1] + ")");
+        int[] c3 = Primer3Dialog.clampMid(100, 300000, 19000);
+        check(c3[1] - c3[0] == 19000 && c3[0] == 140550, "clampMid 成对19kb截断 (" + c3[0] + "-" + c3[1] + ")");
+
+        // 13. v0.1.59：putIfPresent（空=不写入，非空写入）
+        Map<String, String> ap = new LinkedHashMap<String, String>();
+        javax.swing.JTextField empty = new javax.swing.JTextField("  ");
+        javax.swing.JTextField val = new javax.swing.JTextField("0.8");
+        Primer3Dialog.putIfPresent(ap, "PRIMER_DNTP_CONC", empty);
+        Primer3Dialog.putIfPresent(ap, "PRIMER_DNA_CONC", val);
+        check(ap.size() == 1 && "0.8".equals(ap.get("PRIMER_DNA_CONC")), "putIfPresent 空跳过/非空写入");
+
+        // 14. v0.1.59：currentViewRange 在无 IGV 实例时安全返回 null（不抛异常）
+        String[] v = Primer3Dialog.currentViewRange();
+        check(v == null || (v.length == 3 && Integer.parseInt(v[2]) > Integer.parseInt(v[1])),
+                "currentViewRange headless 安全 (=" + Arrays.toString(v) + ")");
+
         System.out.println("==== " + pass + " passed, " + fail + " failed ====");
         if (fail > 0) System.exit(1);
     }
