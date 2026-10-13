@@ -45,4 +45,11 @@ fi
 # v0.1.25：重打包 PrimerPlugin.jar（install.py 的注入源；此前漏了这步导致注入的一直是旧类）
 rm -f PrimerPlugin.jar
 "$JAVA8_HOME/bin/jar" cf PrimerPlugin.jar -C "$OUT" org/
+
+# v0.1.56：把 primer3_core.exe（Primer3 2.x 静态可执行，约 1MB）作为资源打进 jar，
+# 运行时由 Primer3Core 释放到 user.home/.igv_primer3/ 并 md5 校验。
+if [ -f resources/org/broad/igv/primer/primer3_core.exe ]; then
+  "$JAVA8_HOME/bin/jar" uf PrimerPlugin.jar -C resources org/broad/igv/primer/primer3_core.exe
+  echo "== 已打包 primer3_core.exe 资源 =="
+fi
 echo "== 打包 PrimerPlugin.jar 完成 =="

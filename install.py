@@ -41,16 +41,22 @@ def log(msg):
 
 
 def load_plugin_bytes():
-    """优先读 PrimerPlugin.jar，否则回退到 classes/ 目录。返回 {name: bytes}。"""
+    """优先读 PrimerPlugin.jar，否则回退到 classes/ 目录。返回 {name: bytes}。
+    v0.1.56：除 class 外，还收集插件资源（如 primer3_core.exe），一并注入目标 jar。"""
     jar = os.path.join(HERE, "PrimerPlugin.jar")
     cls = {}
     if os.path.exists(jar):
         z = zipfile.ZipFile(jar)
         for n in z.namelist():
-            if n.endswith(".class") and (n.startswith(PLUGIN) or n.startswith(PATCHES)):
-                cls[n] = z.read(n)
+            if n.endswith("/"):
+                continue
+            if n.endswith(".class"):
+                if n.startswith(PLUGIN) or n.startswith(PATCHES):
+                    cls[n] = z.read(n)
+            elif n.startswith(PLUGIN):
+                cls[n] = z.read(n)   # v0.1.56：插件资源（primer3_core.exe 等）
         z.close()
-        log("从 PrimerPlugin.jar 读取 %d 个类" % len(cls))
+        log("从 PrimerPlugin.jar 读取 %d 个条目（类+资源）" % len(cls))
         return cls
     clsdir = os.path.join(HERE, "classes")
     if os.path.isdir(clsdir):

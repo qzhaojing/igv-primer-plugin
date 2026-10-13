@@ -263,6 +263,7 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
         defs.put("exp", "导出BED");
         defs.put("imp", "导入");
+        defs.put("p3", "设计");   // v0.1.56：primer3 设计引物（不依赖本轨，作用于当前基因组）
         defs.put("save", "保存" + (isDirty() ? " *" : ""));   // v0.1.54：回写源文件；无来源文件时等同另存为
         defs.put("saveas", "另存为");
         defs.put("close", "关闭");
@@ -1172,6 +1173,10 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
+        // v0.1.56：primer3 设计引物（区域/参数在对话框指定，结果勾选后加入指定分组轨）
+        menu.add(item("primer3 设计引物...", new Runnable() {
+            public void run() { Primer3Dialog.open(); }
+        }));
         // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为
         final String srcTip = (sourceFile == null) ? "（未关联文件 → 将弹另存为）" : ("（" + sourceFile.getName() + "）");
         menu.add(item("保存本轨" + (isDirty() ? " ●有改动" : "") + " " + srcTip, new Runnable() {
@@ -1356,6 +1361,9 @@ public class PrimerTrack extends AbstractTrack {
             ExportUtils.exportBED(this.group);   // 仅导出本轨分组的引物
         } else if ("imp".equals(id)) {
             ExportUtils.importBED();
+        } else if ("p3".equals(id)) {
+            // v0.1.56：primer3 设计引物（区域在对话框里指定，结果可选加入任一分组）
+            Primer3Dialog.open();
         } else if ("save".equals(id)) {
             ExportUtils.saveTrack(this);      // v0.1.54：回写来源文件（无则弹另存为）
         } else if ("saveas".equals(id)) {
