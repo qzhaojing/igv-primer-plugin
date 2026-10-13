@@ -162,7 +162,9 @@ public class Primer3Dialog {
             regionPanel.add(advPanel);
             advPanel.setVisible(false);
             if (single) {
-                modeBox.setEnabled(false);   // 单引物只有一种区域模式
+                // 单引物只有一种区域模式：禁用模式框并换成正确文案（避免显示"产物区间"误导）
+                modeBox.setModel(new DefaultComboBoxModel(new String[]{"简单：指定引物区域"}));
+                modeBox.setEnabled(false);
                 prodMinF.setEnabled(false);  // 单引物无产物概念
                 prodMaxF.setEnabled(false);
             }
@@ -328,8 +330,13 @@ public class Primer3Dialog {
                 }
 
                 int s = i(tStartF, "区域起"), e = i(tEndF, "区域止");
-                int us = i(uStartF, "上游区起"), ul = i(uLenF, "上游区长");
-                int ds = i(dStartF, "下游区起"), dl = i(dLenF, "下游区长");
+                // 仅高级+成对才读上/下游区字段：单引物时 modeBox 禁用（永远简单模式），
+                // advPanel 隐藏且字段为空，无条件解析会抛「上游区起 不是有效整数」
+                int us = 0, ul = 0, ds = 0, dl = 0;
+                if (adv && !single) {
+                    us = i(uStartF, "上游区起"); ul = i(uLenF, "上游区长");
+                    ds = i(dStartF, "下游区起"); dl = i(dLenF, "下游区长");
+                }
 
                 int[] tmpl = regionToTemplate(mode, adv && !single, s, e, us, ul, ds, dl,
                         chrLen, lenMin, lenMax);
