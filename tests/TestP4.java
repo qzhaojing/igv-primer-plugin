@@ -10,7 +10,12 @@ import java.util.Random;
  * v0.1.60：修复「成对简单模式总是无解」。
  * 根因：SEQUENCE_TARGET 语义=产物必须覆盖整个 target（非重叠），
  * 最小产物 = target长 + 两侧引物长；v0.1.59 把产物上限放到 target 等长（甚至更小），必然无解。
- * 本测试端到端复刻 runDesign 的参数构造，验证新公式 needMax = tLen + 2*lenMax。
+ * 本测试端到端复刻 runDesign 的参数构造，验证上限自适应公式。
+ *
+ * v0.1.62：v0.1.60 公式（上限=tLen+2×lenMax，物理最小）只保证"有理论解"——引物必须双双
+ * 贴住 target 边缘，OK 候选位置漂几个 bp 就全部 unacceptable product size（用户截图：
+ * 2602bp 区间、lenMax=21、considered 全灭 0 对）。新公式放到模板可达范围 tLen+2×pad，
+ * 场景7 精确复现该 bug 并验证修复。
  */
 public class TestP4 {
     static int pass = 0, fail = 0;
@@ -38,10 +43,12 @@ public class TestP4 {
         params.put("PRIMER_NUM_RETURN", String.valueOf(numRet));
         params.put("PRIMER_PICK_LEFT_PRIMER", "1");
         params.put("PRIMER_PICK_RIGHT_PRIMER", "1");
-        // v0.1.60 修复逻辑（与 Primer3Dialog 一致）
+        // v0.1.62 修复逻辑（与 Primer3Dialog 一致）：上限放到模板可达范围 tLen+2×pad，
+        // 而非物理最小 tLen+2×lenMax（后者要求引物双双贴住 target 边缘，候选漂移即全灭）
         int tLen = e - (s - 1);
         int prodMax = prodMaxUser;
-        int needMax = tLen + 2 * lenMax;
+        int pad = Math.max(lenMax * 2, 120);
+        int needMax = tLen + 2 * pad;
         if (prodMax < needMax) prodMax = needMax;
         params.put("PRIMER_PRODUCT_SIZE_RANGE", prodMin + "-" + prodMax);
         params.put("SEQUENCE_TARGET", (s - 1 - tmplStart) + "," + tLen);
@@ -66,7 +73,7 @@ public class TestP4 {
         check(oldR.isEmpty(), "旧公式(上限=target等长)无解——复现用户bug");
         // 新公式应有解
         List<Primer3Core.Pair> r1 = Primer3Core.design("t_new", seq, p1);
-        check(!r1.isEmpty(), "新公式(上限=2662+54)有解 (" + r1.size() + " 对)");
+        check(!r1.isEmpty(), "新公式(上限=2662+240=模板可达)有解 (" + r1.size() + " 对)");
         if (!r1.isEmpty()) {
             Primer3Core.Pair p = r1.get(0);
             // target 覆盖验证：left 起点 ≤ target 起、right 终点 ≥ target 止
@@ -118,6 +125,33 @@ public class TestP4 {
         rtt.setAccessible(true);
         int[] rt = (int[]) rtt.invoke(null, Primer3Dialog.MODE_PAIR, false, s, e, 0, 0, 0, 0, 248956422, 18, 27);
         check(rt[0] == s - 1 - 120 && rt[1] == e + 120, "regionToTemplate 模板±120 (" + rt[0] + "," + rt[1] + ")");
+
+        // ---- 场景7：v0.1.62 用户截图精确复现（lenMax=21, 2602bp 区间, 模板=区间±120=2842）----
+        // v0.1.60 公式上限=2602+2×21=2644（物理最小）：引物必须双双贴住选区边缘才有解，
+        // 实测该序列 considered 全灭、0 对（ unacceptable product size ）。
+        // v0.1.62 公式上限=2602+2×120=2842（模板可达）：引物可两侧各外漂 120bp，满额有解。
+        Random rnd7 = new Random(1);
+        StringBuilder sb7 = new StringBuilder();
+        for (int i = 0; i < 2842; i++) sb7.append("ACGT".charAt(rnd7.nextInt(4)));
+        String seq7 = sb7.toString();
+        int s7 = 226911, e7 = 229512;            // 1-based，2602bp（与用户截图一致）
+        int ts7 = s7 - 1 - 120;                   // 模板起点（0-based）
+        Map<String, String> p7 = pairParams(18, 20, 21, 57, 60, 63, 30, 70, 5, s7, e7, 100, 300, ts7);
+        // v0.1.60 旧公式：上限=2602+2×21=2644 → 应无解（复现用户 bug）
+        Map<String, String> p7old = new LinkedHashMap<String, String>(p7);
+        p7old.put("PRIMER_PRODUCT_SIZE_RANGE", "100-2644");
+        List<Primer3Core.Pair> r7old = Primer3Core.design("t7_old", seq7, p7old);
+        check(r7old.isEmpty(), "v0.1.60公式(上限=区间+2×最长引物)无解——复现用户截图");
+        // v0.1.62 新公式：上限=2602+240=2842 → 应有解
+        List<Primer3Core.Pair> r7 = Primer3Core.design("t7_new", seq7, p7);
+        check(!r7.isEmpty(), "v0.1.62公式(上限=区间+2×pad)有解 (" + r7.size() + " 对)");
+        if (!r7.isEmpty()) {
+            Primer3Core.Pair p = r7.get(0);
+            check(p.leftStart <= 120 && p.rightStart + p.rightLen >= 120 + 2602,
+                    "产物覆盖整个选区 (left=" + p.leftStart + ", rightEnd=" + (p.rightStart + p.rightLen) + ")");
+            check(p.productSize >= 2602 && p.productSize <= 2842,
+                    "产物在 [区间长, 模板可达上限] (" + p.productSize + "bp)");
+        }
 
         System.out.println("==== " + pass + " passed, " + fail + " failed ====");
         if (fail > 0) System.exit(1);

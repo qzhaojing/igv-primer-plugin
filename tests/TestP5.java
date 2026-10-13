@@ -93,7 +93,8 @@ public class TestP5 {
         int ds0 = 2500, dl = 400;     // 下游区 0-based [2500,2900)
         int tmplStart = 1446;
         int tLen = e1 - (s1 - 1);
-        int prodMaxAuto = Math.max(300, tLen + 2 * lenMax);   // v0.1.60/0.1.61 自适应公式值
+        // 注：本测试手写 PRIMER_PRODUCT_SIZE_RANGE=100-1000（见下），验证双区约束语义；
+        // 上限自适应公式（v0.1.62: tLen+2×pad）由 TestP4 场景7 覆盖。
 
         Map<String, String> params = new LinkedHashMap<String, String>();
         params.put("PRIMER_MIN_SIZE", String.valueOf(lenMin));

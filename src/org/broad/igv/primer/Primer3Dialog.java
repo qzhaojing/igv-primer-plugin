@@ -34,6 +34,13 @@ import java.util.Map;
  *  - 高级模式产物区间非空时补发 SEQUENCE_TARGET（产物必须覆盖它）+ v0.1.60 同款上限自适应；
  *  - 简单→高级切换时上下游为空则按产物区间自动补全（左右 100~500bp）。
  *
+ * v0.1.62：修复大面积产物区间必无解（unacceptable product size 全灭）：
+ *  - 产物上限自适应从"物理最小 tLen+2×lenMax"改为"模板可达范围 tLen+2×pad"
+ *    （pad=max(2×最长引物,120)）：前者要求引物双双贴住选区边缘，候选位置漂几个 bp 即全灭；
+ *    后者允许引物在选区两侧各外漂 pad，产物仍覆盖整个选区，primer3 自动挑最贴近的；
+ *  - 模板容量检查 need 同步重算（旧公式 prodMax+2×lenMax 会在新 prodMax 下误报）；
+ *  - 无解弹窗按 EXPLAIN 统计动态生成建议（GC/tm/产物范围/二聚体哪个失败多优先建议哪个）。
+ *
  * 参数只暴露常用项（长度/Tm/GC/产物范围/返回对数），预设一键填充；高级参数走默认值。
  */
 public class Primer3Dialog {
@@ -178,6 +185,64 @@ public class Primer3Dialog {
     public static void putIfPresent(Map<String, String> params, String tag, JTextField f) {
         String v = f.getText().trim();
         if (!v.isEmpty()) params.put(tag, v);
+    }
+
+    /**
+     * v0.1.62：解析 primer3 EXPLAIN 统计，按失败数量降序给出可操作建议。
+     * 输入形如 "LEFT: considered 985, GC content failed 598, low tm 11, ok 86"。
+     * 只统计 "xxx failed N" 段；无统计时返回空串（调用方回落到通用建议）。
+     */
+    static String explainTips(String explain, boolean single) {
+        java.util.Map<String, Long> fail = new java.util.LinkedHashMap<String, Long>();
+        for (String ln : explain.split("\n")) {
+            for (String seg : ln.split(",")) {
+                seg = seg.trim();
+                int idx = seg.indexOf(" failed ");
+                if (idx < 0) continue;
+                String reason = seg.substring(0, idx).trim();
+                int c = reason.indexOf(':');
+                if (c >= 0) reason = reason.substring(c + 1).trim();
+                try {
+                    long n = Long.parseLong(seg.substring(idx + 8).trim());
+                    Long old = fail.get(reason);
+                    fail.put(reason, old == null ? n : old + n);
+                } catch (NumberFormatException ignore) { }
+            }
+        }
+        if (fail.isEmpty()) return "";
+        java.util.List<java.util.Map.Entry<String, Long>> es =
+                new java.util.ArrayList<java.util.Map.Entry<String, Long>>(fail.entrySet());
+        java.util.Collections.sort(es, new java.util.Comparator<java.util.Map.Entry<String, Long>>() {
+            public int compare(java.util.Map.Entry<String, Long> a, java.util.Map.Entry<String, Long> b) {
+                return Long.compare(b.getValue(), a.getValue());
+            }
+        });
+        StringBuilder sb = new StringBuilder("<b>失败原因（按数量降序）：</b>");
+        int shown = 0;
+        for (java.util.Map.Entry<String, Long> en : es) {
+            if (en.getValue() <= 0) continue;
+            String tip = tipFor(en.getKey(), single);
+            sb.append("<br>· ").append(en.getKey()).append(" ×").append(en.getValue());
+            if (tip != null) sb.append(" → ").append(tip);
+            if (++shown >= 3) break;
+        }
+        return sb.toString();
+    }
+
+    /** v0.1.62：primer3 EXPLAIN 原因词 → 对话框里的可操作建议（无匹配返回 null）。 */
+    private static String tipFor(String reason, boolean single) {
+        if (reason.contains("product size")) return "减小「产物 min」/ 增大「产物 max」（上限已自动放到模板可达范围）";
+        if (reason.contains("GC content")) return "放宽 GC 范围（如 20%-80%）";
+        if (reason.contains("low tm")) return "提高 Tm 下限（如 55℃）";
+        if (reason.contains("high tm")) return "提高 Tm 上限（如 65℃）";
+        if (reason.contains("complementarity") || reason.contains("self"))
+            return "放宽二聚体/自互补阈值（高级参数，默认 ANY=8 / END=3）";
+        if (reason.contains("hairpin")) return "放宽发夹阈值（高级参数，默认 47）";
+        if (reason.contains("poly X")) return "放宽多聚 X 上限（高级参数，默认 5）";
+        if (reason.contains("stability")) return "放宽 3' 端稳定性阈值（高级参数）";
+        if (reason.contains("GC clamp")) return "放宽 3' GC 钳位（高级参数）";
+        if (reason.contains("no valid") || reason.contains("template")) return single ? "扩大引物区域" : "扩大产物区间";
+        return null;
     }
 
     private static class Dlg extends JDialog {
@@ -590,17 +655,22 @@ public class Primer3Dialog {
                 } else {
                     params.put("PRIMER_PICK_LEFT_PRIMER", "1");
                     params.put("PRIMER_PICK_RIGHT_PRIMER", "1");
-                    // v0.1.60：产物区间即 SEQUENCE_TARGET。primer3 语义=产物必须**覆盖**整个
-                    // target（不是重叠），故最小产物 = target长 + 两侧引物长；上限放到 tLen 甚至
-                    // tLen 以内都必然无解。上限自适应为 tLen + 2×最长引物，并提示。
-                    // v0.1.61：高级模式设了产物区间同样需要（原来只覆盖简单模式）。
+                    // v0.1.60/v0.1.62：产物区间即 SEQUENCE_TARGET。primer3 语义=产物必须**覆盖**整个
+                    // target（不是重叠），故产物 ∈ [tLen+L+R, 模板可达上限]。
+                    // v0.1.60 把上限只放到物理最小 tLen+2×lenMax → 引物必须双双紧贴选区边缘才可能
+                    // 有解，OK 候选位置漂几个 bp 就全部 unacceptable product size（实测 2.6kb 选区：
+                    // considered 16902 全灭、0 对；换序列偶发 5/2 对，大面积选区基本必崩）。
+                    // v0.1.62 修正：上限放到**模板物理可达范围** tLen+2×pad（pad=max(2×最长引物,120)，
+                    // 与 regionToTemplate 一致）——引物可在选区两侧各最多外漂 pad，产物仍覆盖整个
+                    // 选区；primer3 自会挑最贴近选区的产物（实测多种 seed 满额返回，产物均覆盖选区）。
                     if (hasProduct) {
                         int tLen = e - (s - 1);
-                        int needMax = tLen + 2 * lenMax;
+                        int pad = Math.max(lenMax * 2, 120);
+                        int needMax = tLen + 2 * pad;
                         if (prodMax < needMax) {
                             prodMax = needMax;
                             statusL.setText("提示: 产物上限已放大为 " + prodMax
-                                    + "bp（覆盖 " + tLen + "bp 区间 + 两侧引物最长各 " + lenMax + "bp）");
+                                    + "bp（覆盖 " + tLen + "bp 区间 + 两侧引物各最多外漂 " + pad + "bp）");
                         }
                     }
                     params.put("PRIMER_PRODUCT_SIZE_RANGE", prodMin + "-" + prodMax);
@@ -654,7 +724,14 @@ public class Primer3Dialog {
                     params.put("SEQUENCE_PRIMER_PAIR_OK_REGION_LIST",
                             (us - 1 - tmplStart) + "," + ul + "," + (ds - 1 - tmplStart) + "," + dl);
                 }
-                int need = single ? 2 * lenMax : (prodMax + 2 * lenMax);
+                // v0.1.62：模板容量下限重算。prodMax 已是"模板可达产物上限"（含引物自身空间），
+                // 模板 ≥ prodMax 即可；旧公式 prodMax+2×lenMax 会把引物长度重复计一遍，
+                // 在新的 prodMax（=tLen+2×pad）下必误报"模板区装不下最长产物"。
+                // 有 TARGET 时产物物理最小 = tLen + 2×lenMax，模板（区间±pad，pad≥2×lenMax）恒可容纳。
+                int need;
+                if (single) need = 2 * lenMax;
+                else if (hasProduct) need = (e - (s - 1)) + 2 * lenMax;
+                else need = prodMax;
                 if (tmplEnd - tmplStart > 20000) throw new Exception("模板区过大（>20kb），primer3 会很慢；请缩小区间或分块设计");
                 if (tmplEnd - tmplStart < need)
                     throw new Exception("模板区（" + (tmplEnd - tmplStart) + "bp）装不下" +
@@ -679,6 +756,10 @@ public class Primer3Dialog {
                         for (String ln : Primer3Core.lastExplain.split("\n"))
                             tip.append(ln).append("<br>");
                         tip.append("<br>");
+                        // v0.1.62：按 EXPLAIN 统计动态生成建议（哪个原因失败最多就优先建议哪个），
+                        // 不再是无差别的一句"放宽参数"
+                        String tips = explainTips(Primer3Core.lastExplain, single);
+                        if (!tips.isEmpty()) tip.append(tips).append("<br>");
                     }
                     tip.append("可尝试：放宽 Tm/GC 范围、")
                        .append(single ? "扩大区域" : "增大产物范围、扩大区域")
