@@ -149,7 +149,7 @@ public class Primer3Core {
             if (i <= 0) continue;
             d.put(line.substring(0, i).trim(), line.substring(i + 1).trim());
         }
-        // v0.1.60：提取 EXPLAIN 诊断（considered N, low tm N, ok N），无解时告知用户真实原因
+        // v0.1.60：提取 EXPLAIN 诊断（considered N, low tm N, ok n），无解时告知用户真实原因
         lastExplain = null;
         for (String k : new String[]{"PRIMER_LEFT_EXPLAIN", "PRIMER_RIGHT_EXPLAIN", "PRIMER_PAIR_EXPLAIN"}) {
             String v = d.get(k);
@@ -157,6 +157,14 @@ public class Primer3Core {
                 String tag = k.replace("PRIMER_", "").replace("_EXPLAIN", "");
                 lastExplain = (lastExplain == null ? "" : lastExplain + "\n") + tag + ": " + v;
             }
+        }
+        // v0.1.61：primer3 输入非法（如 tag 值格式错误）时输出 PRIMER_ERROR 且不产出任何结果，
+        // 退出码仍为 0。此前被静默吞掉 → 对话框只显示"未找到合适引物对"根本无法排查
+        // （v0.1.56 的 SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 单区格式 bug 正是这样藏了多个版本）。
+        String perr = d.get("PRIMER_ERROR");
+        if (perr != null && !perr.isEmpty()) {
+            lastExplain = "primer3 报错: " + perr
+                    + (lastExplain == null || lastExplain.isEmpty() ? "" : "\n" + lastExplain);
         }
         // 结果条数 = 成对/单左/单右各自 NUM_RETURNED 的最大值（单引物模式 PAIR_N=0）
         int n = 0;

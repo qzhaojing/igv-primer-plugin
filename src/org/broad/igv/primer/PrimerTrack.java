@@ -1179,14 +1179,27 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
-        // v0.1.57：primer3 设计引物——成对 / 仅F向(+) / 仅R向(-)；有鼠标选区时对话框自动预填该区间
-        menu.add(item("primer3 设计成对引物...", new Runnable() {
+        // v0.1.61：primer3 设计引物——成对 / 仅F向(+) / 仅R向(-)。
+        // 有鼠标选区（空白/Shift+拖选，松手保留）→ 对话框自动填充产物区间+上下游(左右100~500bp，限屏幕)；
+        // 无选区 → 按当前视图填充。菜单文案动态显示选区状态，保证可发现性。
+        JMenuItem selHint = new JMenuItem("拖选区域（或Shift+拖动）→ 右键自动填充产物区间+上下游区");
+        selHint.setEnabled(false);
+        menu.add(selHint);
+        String[] selNow = PrimerEditTool.currentSelection();
+        try {   // 选区已平移出当前染色体 → 视为无选区
+            String curChr = e.getFrame().getChrName();
+            if (selNow != null && curChr != null && !selNow[0].equals(curChr)) selNow = null;
+        } catch (Throwable ignore) {}
+        final String selTag = selNow != null
+                ? "（选区 " + selNow[0] + ":" + (Integer.parseInt(selNow[1]) + 1) + "-" + (Integer.parseInt(selNow[2]) + 1) + " → 填产物+上下游）"
+                : "（无选区 → 当前视图）";
+        menu.add(item("primer3 设计成对引物..." + selTag, new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_PAIR); }
         }));
-        menu.add(item("primer3 设计F向单引物(+)...", new Runnable() {
+        menu.add(item("primer3 设计F向单引物(+)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT); }
         }));
-        menu.add(item("primer3 设计R向单引物(-)...", new Runnable() {
+        menu.add(item("primer3 设计R向单引物(-)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT); }
         }));
         // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为

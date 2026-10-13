@@ -20,7 +20,8 @@ import java.util.Map;
  * 引物编辑工具 v2：
  *  - 悬停引物左右边缘 ±6px = 双向箭头光标，可拖动改长度
  *  - 悬停/按住引物本体 = 移动光标，固定长度左右平移
- *  - 空白处按住拖动 = 正常平移视图（委托 IGV 原生 PanTool）
+ *  - 空白处按住拖动 = 平移视图 + 记录掠过的区间为鼠标选区（松手保留；右键「primer3 设计*」
+ *    自动填充产物区间+上下游区，v0.1.61）；单击（位移<5bp）清除选区
  *  - 拖拽中两条红竖线参考线（起止坐标）
  *  - 单击 = 选中（出现橙色端点手柄）
  *  - 坐标换算统一走 frame.getChromosomePosition()（IGV 权威，避免 scale 单位踩坑）
@@ -87,6 +88,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
         PrimerStore.refresh();
         removeKeyboard();
+        clearSelection();   // v0.1.61：选区随编辑模式一起消失，避免右键菜单显示已看不见的选区
         instance = null;   // v0.1.20：退出后必须置 null，否则 inEditMode() 永久为真，菜单/按钮卡在"退出编辑"
     }
 
@@ -173,6 +175,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     // ---------- v0.1.57：鼠标选区（空白处拖拽=平移+画红线，松手后保留为选区） ----------
     // 右键「primer3 设计*」读它预填区域；单击（位移<5bp）视为取消选区。
+    // v0.1.61：Shift+拖动同样有效（不检查修饰键，普通空白拖拽即选区）；退出编辑模式时清除。
     private static String selChr;
     private static int selStart, selEnd;      // 0-based，selStart <= selEnd
     private static int pressBp;               // 空白拖拽按下时的 bp（平移起点）

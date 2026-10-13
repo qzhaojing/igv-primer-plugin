@@ -20,3 +20,7 @@ result.txt
 
 # Local project memory (not part of the distributed plugin)
 .workbuddy/
+
+# Test class output & patch build dir
+tests/*.class
+igv-patches/bin/
