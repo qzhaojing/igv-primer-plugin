@@ -106,6 +106,91 @@ public class TestP3 {
         check(n == 181 && !plain[0] && !out.get(0).pairedWith.isEmpty(),
                 "标准BED回归 (n=" + n + " plain=" + plain[0] + ")");
 
+        // ================= v0.1.57：单引物模式 =================
+        // 8. F 向单引物：只 pick left，INCLUDED_REGION 限定引物落在 100-200
+        Map<String, String> pL = new LinkedHashMap<String, String>();
+        pL.putAll(params);
+        pL.remove("SEQUENCE_PRIMER_PAIR_OK_REGION_LIST");
+        pL.put("PRIMER_PICK_LEFT_PRIMER", "1");
+        pL.put("PRIMER_PICK_RIGHT_PRIMER", "0");
+        pL.put("SEQUENCE_INCLUDED_REGION", "100,100");
+        pL.put("SEQUENCE_TARGET", "140,20");
+        List<Primer3Core.Pair> lp = Primer3Core.design("tL", seq, pL);
+        check(!lp.isEmpty(), "F向单引物有解 (" + lp.size() + " 条)");
+        if (!lp.isEmpty()) {
+            Primer3Core.Pair p = lp.get(0);
+            check(p.leftSeq != null && p.rightSeq == null && p.isSingle(), "F单引物: 仅 left 有值");
+            check(p.leftStart >= 100 && p.leftStart + p.leftLen <= 200,
+                    "F引物落在 INCLUDED 100-200 内 (" + p.leftStart + "-" + (p.leftStart + p.leftLen) + ")");
+            check(p.leftTm > 0 && p.leftGc > 0, "F单引物 Tm/GC 有值");
+            List<Primer> one = p.toPrimers("chr1", "p3s", 500, null);
+            check(one.size() == 1 && one.get(0).strand == '+' && one.get(0).pairedWith.isEmpty(),
+                    "F单引物 toPrimers=1条(+)无配对");
+            check(one.get(0).start == 500 + p.leftStart, "F单引物坐标换算");
+        }
+
+        // 9. R 向单引物
+        Map<String, String> pR = new LinkedHashMap<String, String>();
+        pR.putAll(params);
+        pR.remove("SEQUENCE_PRIMER_PAIR_OK_REGION_LIST");
+        pR.put("PRIMER_PICK_LEFT_PRIMER", "0");
+        pR.put("PRIMER_PICK_RIGHT_PRIMER", "1");
+        pR.put("SEQUENCE_INCLUDED_REGION", "100,100");
+        pR.put("SEQUENCE_TARGET", "140,20");
+        List<Primer3Core.Pair> rp = Primer3Core.design("tR", seq, pR);
+        check(!rp.isEmpty(), "R向单引物有解 (" + rp.size() + " 条)");
+        if (!rp.isEmpty()) {
+            Primer3Core.Pair p = rp.get(0);
+            check(p.rightSeq != null && p.leftSeq == null && p.isSingle(), "R单引物: 仅 right 有值");
+            check(p.rightStart >= 100 && p.rightStart + p.rightLen <= 200,
+                    "R引物落在 INCLUDED 100-200 内 (" + p.rightStart + "-" + (p.rightStart + p.rightLen) + ")");
+            List<Primer> one = p.toPrimers("chr1", "p3s", 500, null);
+            check(one.size() == 1 && one.get(0).strand == '-' && one.get(0).pairedWith.isEmpty(),
+                    "R单引物 toPrimers=1条(-)无配对");
+        }
+
+        // 10. parse() 单左输出（PAIR_NUM_RETURNED=0，只有 LEFT_N + LEFT_i 字段）
+        String mockL = "PRIMER_PAIR_NUM_RETURNED=0\nPRIMER_LEFT_NUM_RETURNED=2\nPRIMER_RIGHT_NUM_RETURNED=0\n"
+                + "PRIMER_LEFT_0=106,20\nPRIMER_LEFT_1=110,22\n"
+                + "PRIMER_LEFT_0_SEQUENCE=AAAACCCCGGGGTTTTACGT\nPRIMER_LEFT_1_SEQUENCE=TTTTGGGGCCCCAAAATGC\n"
+                + "PRIMER_LEFT_0_TM=59.5\nPRIMER_LEFT_1_TM=60.1\n"
+                + "PRIMER_LEFT_0_GC_PERCENT=50\nPRIMER_LEFT_1_GC_PERCENT=45\n"
+                + "=\n";
+        List<Primer3Core.Pair> mpL = Primer3Core.parse(mockL);
+        check(mpL.size() == 2 && mpL.get(0).leftSeq != null && mpL.get(0).rightSeq == null
+                && mpL.get(0).leftStart == 106 && mpL.get(0).isSingle(), "parse() 单左输出");
+        String mockR = "PRIMER_PAIR_NUM_RETURNED=0\nPRIMER_LEFT_NUM_RETURNED=0\nPRIMER_RIGHT_NUM_RETURNED=1\n"
+                + "PRIMER_RIGHT_0=125,20\nPRIMER_RIGHT_0_SEQUENCE=ACGTACGTACGTACGTACGT\n"
+                + "PRIMER_RIGHT_0_TM=58.9\nPRIMER_RIGHT_0_GC_PERCENT=50\n=\n";
+        List<Primer3Core.Pair> mpR = Primer3Core.parse(mockR);
+        check(mpR.size() == 1 && mpR.get(0).rightSeq != null && mpR.get(0).leftSeq == null, "parse() 单右输出");
+
+        // 11. regionToTemplate：单引物区域→模板±pad；过短区域抛错
+        Method rtt = Primer3Dialog.class.getDeclaredMethod("regionToTemplate",
+                int.class, boolean.class, int.class, int.class, int.class, int.class, int.class, int.class,
+                int.class, int.class, int.class);
+        rtt.setAccessible(true);
+        int[] t1 = (int[]) rtt.invoke(null, Primer3Dialog.MODE_LEFT, false, 101, 200, 0, 0, 0, 0, 1000, 18, 27);
+        check(t1[0] == Math.max(0, 100 - 120) && t1[1] == Math.min(1000, 200 + 120),
+                "regionToTemplate 单引物模板±120 (" + t1[0] + "," + t1[1] + ")");
+        boolean threw = false;
+        try {
+            rtt.invoke(null, Primer3Dialog.MODE_RIGHT, false, 101, 110, 0, 0, 0, 0, 1000, 18, 27);
+        } catch (Exception ex) {
+            threw = true;
+        }
+        check(threw, "regionToTemplate 区域短于最短引物抛错");
+        // v0.1.57：两区分离（上游100-140 / 下游300-340）是正常场景，不应抛错（v0.1.56 曾误判）
+        int[] t2 = (int[]) rtt.invoke(null, Primer3Dialog.MODE_PAIR, true, 0, 0, 101, 40, 301, 40, 1000, 18, 27);
+        check(t2[0] == 100 - 54 && t2[1] == 340 + 54, "regionToTemplate 高级模式模板覆盖双区 (" + t2[0] + "," + t2[1] + ")");
+        boolean threw2 = false;
+        try {
+            rtt.invoke(null, Primer3Dialog.MODE_PAIR, true, 0, 0, 401, 40, 301, 40, 1000, 18, 27);
+        } catch (Exception ex) {
+            threw2 = true;
+        }
+        check(threw2, "regionToTemplate 上游在右抛错");
+
         System.out.println("==== " + pass + " passed, " + fail + " failed ====");
         if (fail > 0) System.exit(1);
     }

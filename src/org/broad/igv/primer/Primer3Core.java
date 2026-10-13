@@ -8,7 +8,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.security.MessageDigest;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -70,12 +69,12 @@ public class Primer3Core {
     }
 
     /**
-     * 设计引物对。
+     * 设计引物（成对或单条，由 params 中的 PRIMER_PICK_LEFT/RIGHT_PRIMER 决定）。
      *
      * @param id        SEQUENCE_ID（会过滤非法字符）
      * @param template  模板序列（自动转大写）
-     * @param params    附加参数（长度/Tm/GC/产物范围/OK_REGION 等），null=仅默认
-     * @return 按 primer3 排序的引物对列表；无解返回空列表（退出码仍为 0，须判 PAIR_NUM_RETURNED）
+     * @param params    附加参数（长度/Tm/GC/产物范围/OK_REGION 等）；PICK flags 缺省 1/1（成对）
+     * @return 按 primer3 排序的结果列表；无解返回空列表（退出码仍为 0，须判 *_NUM_RETURNED=0）
      */
     public static List<Pair> design(String id, String template, Map<String, String> params) throws IOException {
         File exe = ensureExe();
@@ -85,13 +84,16 @@ public class Primer3Core {
         sb.append("SEQUENCE_ID=").append(safeId).append('\n');
         sb.append("SEQUENCE_TEMPLATE=").append(template.toUpperCase()).append('\n');
         sb.append("PRIMER_TASK=generic\n");
-        sb.append("PRIMER_PICK_LEFT_PRIMER=1\n");
-        sb.append("PRIMER_PICK_RIGHT_PRIMER=1\n");
+        // v0.1.57：单引物模式由调用方通过 params 传 PICK flags；缺省成对
+        sb.append("PRIMER_PICK_LEFT_PRIMER=").append(pick(params, "PRIMER_PICK_LEFT_PRIMER", 1)).append('\n');
+        sb.append("PRIMER_PICK_RIGHT_PRIMER=").append(pick(params, "PRIMER_PICK_RIGHT_PRIMER", 1)).append('\n');
         sb.append("PRIMER_PICK_INTERNAL_OLIGO=0\n");
         sb.append("PRIMER_EXPLAIN_FLAG=1\n");
         if (params != null) {
             for (Map.Entry<String, String> e : params.entrySet()) {
                 if (e.getKey() == null || e.getValue() == null) continue;
+                if ("PRIMER_PICK_LEFT_PRIMER".equals(e.getKey())
+                        || "PRIMER_PICK_RIGHT_PRIMER".equals(e.getKey())) continue;   // 已写，避免重复
                 sb.append(e.getKey()).append('=').append(e.getValue()).append('\n');
             }
         }
@@ -121,7 +123,22 @@ public class Primer3Core {
         }
     }
 
-    /** 解析 Boulder IO 输出（KEY=VALUE 行，记录间以 '=' 分隔；单记录只取第一段）。 */
+    private static int pick(Map<String, String> params, String key, int def) {
+        if (params == null) return def;
+        String v = params.get(key);
+        if (v == null) return def;
+        try {
+            return Integer.parseInt(v.trim());
+        } catch (Exception e) {
+            return def;
+        }
+    }
+
+    /**
+     * 解析 Boulder IO 输出（KEY=VALUE 行）。
+     * v0.1.57：兼容单引物模式——单左/单右时 PAIR_NUM_RETURNED=0 且对侧字段整体缺失，
+     * 故按字段存在性解析：有 PRIMER_LEFT_i 才解左、有 PRIMER_RIGHT_i 才解右，两侧全无才跳过。
+     */
     public static List<Pair> parse(String out) {
         Map<String, String> d = new HashMap<String, String>();
         for (String line : out.split("\r\n|\r|\n")) {
@@ -129,48 +146,58 @@ public class Primer3Core {
             if (i <= 0) continue;
             d.put(line.substring(0, i).trim(), line.substring(i + 1).trim());
         }
-        int nPairs = 0;
-        try {
-            nPairs = Integer.parseInt(d.get("PRIMER_PAIR_NUM_RETURNED"));
-        } catch (Exception ignore) {
+        // 结果条数 = 成对/单左/单右各自 NUM_RETURNED 的最大值（单引物模式 PAIR_N=0）
+        int n = 0;
+        for (String k : new String[]{"PRIMER_PAIR_NUM_RETURNED", "PRIMER_LEFT_NUM_RETURNED", "PRIMER_RIGHT_NUM_RETURNED"}) {
+            try {
+                n = Math.max(n, Integer.parseInt(d.get(k)));
+            } catch (Exception ignore) {
+            }
         }
         List<Pair> res = new ArrayList<Pair>();
-        for (int i = 0; i < nPairs; i++) {
+        for (int i = 0; i < n; i++) {
             try {
-                // 必需字段缺失才跳过整对；其余字段宽松解析（版本差异/缺字段给 NaN，不吞对）
                 String ls = d.get("PRIMER_LEFT_" + i);
                 String rs = d.get("PRIMER_RIGHT_" + i);
                 String lseq = d.get("PRIMER_LEFT_" + i + "_SEQUENCE");
                 String rseq = d.get("PRIMER_RIGHT_" + i + "_SEQUENCE");
-                if (ls == null || rs == null || lseq == null || rseq == null) continue;
+                boolean hasL = ls != null && lseq != null;
+                boolean hasR = rs != null && rseq != null;
+                if (!hasL && !hasR) continue;   // 该序号两侧都无结果
                 Pair pr = new Pair();
                 pr.idx = i;
-                int[] l = parseStartLen(ls);
-                int[] r = parseStartLen(rs);
-                pr.leftStart = l[0];
-                pr.leftLen = l[1];
-                pr.rightStart = r[0];
-                pr.rightLen = r[1];
-                pr.leftSeq = lseq;
-                pr.rightSeq = rseq;
-                pr.leftTm = dbl(d.get("PRIMER_LEFT_" + i + "_TM"));
-                pr.rightTm = dbl(d.get("PRIMER_RIGHT_" + i + "_TM"));
-                pr.leftGc = dbl(d.get("PRIMER_LEFT_" + i + "_GC_PERCENT"));
-                pr.rightGc = dbl(d.get("PRIMER_RIGHT_" + i + "_GC_PERCENT"));
-                pr.productSize = intOr(d.get("PRIMER_PAIR_" + i + "_PRODUCT_SIZE"), 0);
-                pr.complAny = dbl(d.get("PRIMER_PAIR_" + i + "_COMPL_ANY_TH"));
-                pr.complEnd = dbl(d.get("PRIMER_PAIR_" + i + "_COMPL_END_TH"));
-                pr.hairpinL = dbl(d.get("PRIMER_LEFT_" + i + "_HAIRPIN_TH"));
-                pr.hairpinR = dbl(d.get("PRIMER_RIGHT_" + i + "_HAIRPIN_TH"));
-                pr.selfAnyL = dbl(d.get("PRIMER_LEFT_" + i + "_SELF_ANY_TH"));
-                pr.selfEndL = dbl(d.get("PRIMER_LEFT_" + i + "_SELF_END_TH"));
-                pr.selfAnyR = dbl(d.get("PRIMER_RIGHT_" + i + "_SELF_ANY_TH"));
-                pr.selfEndR = dbl(d.get("PRIMER_RIGHT_" + i + "_SELF_END_TH"));
-                pr.leftEndStab = dbl(d.get("PRIMER_LEFT_" + i + "_END_STABILITY"));
-                pr.rightEndStab = dbl(d.get("PRIMER_RIGHT_" + i + "_END_STABILITY"));
-                pr.leftWarn = d.get("PRIMER_LEFT_" + i + "_WARNING");
-                pr.rightWarn = d.get("PRIMER_RIGHT_" + i + "_WARNING");
-                pr.pairWarn = d.get("PRIMER_PAIR_" + i + "_WARNING");
+                if (hasL) {
+                    int[] l = parseStartLen(ls);
+                    pr.leftStart = l[0];
+                    pr.leftLen = l[1];
+                    pr.leftSeq = lseq;
+                    pr.leftTm = dbl(d.get("PRIMER_LEFT_" + i + "_TM"));
+                    pr.leftGc = dbl(d.get("PRIMER_LEFT_" + i + "_GC_PERCENT"));
+                    pr.hairpinL = dbl(d.get("PRIMER_LEFT_" + i + "_HAIRPIN_TH"));
+                    pr.selfAnyL = dbl(d.get("PRIMER_LEFT_" + i + "_SELF_ANY_TH"));
+                    pr.selfEndL = dbl(d.get("PRIMER_LEFT_" + i + "_SELF_END_TH"));
+                    pr.leftEndStab = dbl(d.get("PRIMER_LEFT_" + i + "_END_STABILITY"));
+                    pr.leftWarn = d.get("PRIMER_LEFT_" + i + "_WARNING");
+                }
+                if (hasR) {
+                    int[] r = parseStartLen(rs);
+                    pr.rightStart = r[0];
+                    pr.rightLen = r[1];
+                    pr.rightSeq = rseq;
+                    pr.rightTm = dbl(d.get("PRIMER_RIGHT_" + i + "_TM"));
+                    pr.rightGc = dbl(d.get("PRIMER_RIGHT_" + i + "_GC_PERCENT"));
+                    pr.hairpinR = dbl(d.get("PRIMER_RIGHT_" + i + "_HAIRPIN_TH"));
+                    pr.selfAnyR = dbl(d.get("PRIMER_RIGHT_" + i + "_SELF_ANY_TH"));
+                    pr.selfEndR = dbl(d.get("PRIMER_RIGHT_" + i + "_SELF_END_TH"));
+                    pr.rightEndStab = dbl(d.get("PRIMER_RIGHT_" + i + "_END_STABILITY"));
+                    pr.rightWarn = d.get("PRIMER_RIGHT_" + i + "_WARNING");
+                }
+                if (hasL && hasR) {
+                    pr.productSize = intOr(d.get("PRIMER_PAIR_" + i + "_PRODUCT_SIZE"), 0);
+                    pr.complAny = dbl(d.get("PRIMER_PAIR_" + i + "_COMPL_ANY_TH"));
+                    pr.complEnd = dbl(d.get("PRIMER_PAIR_" + i + "_COMPL_END_TH"));
+                    pr.pairWarn = d.get("PRIMER_PAIR_" + i + "_WARNING");
+                }
                 res.add(pr);
             } catch (Exception skipOne) {
                 // 单对坐标/序列字段损坏：跳过该对，不影响其他对
@@ -242,20 +269,34 @@ public class Primer3Core {
         }
     }
 
-    /** 一对设计结果（模板相对坐标 start,len 与基因组坐标的换算由调用方负责）。 */
+    /** 一对设计结果（模板相对坐标 start,len 与基因组坐标的换算由调用方负责）。
+     *  v0.1.57：单引物模式下只有一侧有值（leftSeq/rightSeq 其一为 null）。 */
     public static class Pair {
         public int idx;
         public String leftSeq, rightSeq;
-        public int leftStart, leftLen, rightStart, rightLen;   // 模板 0-based 坐标
+        public int leftStart, leftLen, rightStart, rightLen;   // 模板 0-based 坐标（缺失侧为 -1/0）
         public double leftTm, rightTm, leftGc, rightGc;
         public int productSize;
-        public double complAny, complEnd;                       // 配对二聚体（双方共享）
+        public double complAny, complEnd;                       // 配对二聚体（单引物模式无）
         public double hairpinL, hairpinR;
         public double selfAnyL, selfEndL, selfAnyR, selfEndR;
         public double leftEndStab, rightEndStab;                // 3' 端稳定性（ΔG，浮点）
         public String leftWarn, rightWarn, pairWarn;
 
-        /** 转成两个 Primer（F=+ / R=-，pairedWith 互链）。tmplOffset=模板起点在基因组上的偏移。 */
+        /** 是否单条结果（单引物模式：仅 F 或仅 R）。 */
+        public boolean isSingle() {
+            return (leftSeq == null) != (rightSeq == null);
+        }
+
+        /** 方向标签：F / R / 成对。 */
+        public String dirLabel() {
+            if (leftSeq == null) return "R";
+            if (rightSeq == null) return "F";
+            return "F+R";
+        }
+
+        /** 转成 Primer 列表（成对=2 条 F(+) / R(- 互链；单引物=1 条，strand 按存在侧）。
+         *  tmplOffset=模板起点在基因组上的偏移。 */
         public List<Primer> toPrimers(String chr, String group, int tmplOffset) {
             return toPrimers(chr, group, tmplOffset, null);
         }
@@ -265,31 +306,53 @@ public class Primer3Core {
          * 防止同分组重复设计时引物名撞车导致 linkByName 配错线。
          */
         public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used) {
-            String fn = unique(group + "_P" + (idx + 1) + "_F", used);
-            String rn = unique(group + "_P" + (idx + 1) + "_R", used);
-            Primer f = new Primer(fn, chr, tmplOffset + leftStart, tmplOffset + leftStart + leftLen,
-                    '+', "R1", leftLen, null);
-            Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
-                    '-', "R2", rightLen, null);
-            f.group = group;
-            r.group = group;
-            f.seq = leftSeq;
-            r.seq = rightSeq;
-            f.tm = leftTm;
-            r.tm = rightTm;
-            f.gc = leftGc;
-            r.gc = rightGc;
-            f.hairpinDG = hairpinL;
-            r.hairpinDG = hairpinR;
-            f.selfDG = selfAnyL;
-            r.selfDG = selfAnyR;
-            f.heteroDG = Double.isNaN(complAny) ? 0 : complAny;
-            r.heteroDG = f.heteroDG;
-            f.max3pComp = 0;
-            r.max3pComp = 0;
-            f.pairedWith.add(rn);
-            r.pairedWith.add(fn);
-            return Arrays.asList(f, r);
+            List<Primer> out = new ArrayList<Primer>();
+            if (leftSeq != null) {
+                String fn = unique(group + "_P" + (idx + 1) + "_F", used);
+                Primer f = new Primer(fn, chr, tmplOffset + leftStart, tmplOffset + leftStart + leftLen,
+                        '+', "R1", leftLen, null);
+                f.group = group;
+                f.seq = leftSeq;
+                f.tm = leftTm;
+                f.gc = leftGc;
+                f.hairpinDG = hairpinL;
+                f.selfDG = selfAnyL;
+                f.heteroDG = Double.isNaN(complAny) ? 0 : complAny;
+                f.max3pComp = 0;
+                out.add(f);
+                if (rightSeq != null) {
+                    // 成对：补 R 并互链
+                    String rn = unique(group + "_P" + (idx + 1) + "_R", used);
+                    Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
+                            '-', "R2", rightLen, null);
+                    r.group = group;
+                    r.seq = rightSeq;
+                    r.tm = rightTm;
+                    r.gc = rightGc;
+                    r.hairpinDG = hairpinR;
+                    r.selfDG = selfAnyR;
+                    r.heteroDG = f.heteroDG;
+                    r.max3pComp = 0;
+                    f.pairedWith.add(rn);
+                    r.pairedWith.add(fn);
+                    out.add(r);
+                }
+            } else if (rightSeq != null) {
+                // 仅 R 向单引物
+                String rn = unique(group + "_P" + (idx + 1) + "_R", used);
+                Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
+                        '-', "R2", rightLen, null);
+                r.group = group;
+                r.seq = rightSeq;
+                r.tm = rightTm;
+                r.gc = rightGc;
+                r.hairpinDG = hairpinR;
+                r.selfDG = selfAnyR;
+                r.heteroDG = Double.isNaN(complAny) ? 0 : complAny;
+                r.max3pComp = 0;
+                out.add(r);
+            }
+            return out;
         }
 
         private static String unique(String base, Set<String> used) {

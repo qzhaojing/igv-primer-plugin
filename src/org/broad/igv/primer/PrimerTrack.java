@@ -235,6 +235,12 @@ public class PrimerTrack extends AbstractTrack {
             g.drawString(b.label, b.rect.x + (b.rect.width - tw) / 2, b.rect.y + b.rect.height - 4);
         }
         drawToolbarBoxes(g);   // 绘制两个圆角参数框（含文本输入框与设置按钮）
+        // v0.1.57：工具条最右侧画插件版本号（开发期对版用，小灰字不抢视线）
+        g.setFont(g.getFont().deriveFont(10f));
+        g.setColor(new Color(150, 150, 150));
+        String ver = PrimerPlugin.VERSION;
+        int verW = g.getFontMetrics(g.getFont()).stringWidth(ver);
+        g.drawString(ver, bar.x + bar.width - verW - 6, bar.y + bar.height - 9);
         // v0.1.54：来源名改由左侧 IGV 轨名面板显示（getName），此处不再在右侧重复画 caption
         applyName();
     }
@@ -263,7 +269,7 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("auto", "自动存:" + (PrimerStore.autosaveEnabled ? "开" : "关"));
         defs.put("exp", "导出BED");
         defs.put("imp", "导入");
-        defs.put("p3", "设计");   // v0.1.56：primer3 设计引物（不依赖本轨，作用于当前基因组）
+        defs.put("p3", "设计");   // v0.1.56：primer3 设计成对引物（单引物走右键菜单；不依赖本轨，作用于当前基因组）
         defs.put("save", "保存" + (isDirty() ? " *" : ""));   // v0.1.54：回写源文件；无来源文件时等同另存为
         defs.put("saveas", "另存为");
         defs.put("close", "关闭");
@@ -1173,9 +1179,15 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
-        // v0.1.56：primer3 设计引物（区域/参数在对话框指定，结果勾选后加入指定分组轨）
-        menu.add(item("primer3 设计引物...", new Runnable() {
-            public void run() { Primer3Dialog.open(); }
+        // v0.1.57：primer3 设计引物——成对 / 仅F向(+) / 仅R向(-)；有鼠标选区时对话框自动预填该区间
+        menu.add(item("primer3 设计成对引物...", new Runnable() {
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_PAIR); }
+        }));
+        menu.add(item("primer3 设计F向单引物(+)...", new Runnable() {
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT); }
+        }));
+        menu.add(item("primer3 设计R向单引物(-)...", new Runnable() {
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT); }
         }));
         // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为
         final String srcTip = (sourceFile == null) ? "（未关联文件 → 将弹另存为）" : ("（" + sourceFile.getName() + "）");
@@ -1362,8 +1374,8 @@ public class PrimerTrack extends AbstractTrack {
         } else if ("imp".equals(id)) {
             ExportUtils.importBED();
         } else if ("p3".equals(id)) {
-            // v0.1.56：primer3 设计引物（区域在对话框里指定，结果可选加入任一分组）
-            Primer3Dialog.open();
+            // v0.1.57：工具条「设计」= 成对引物；单引物（F/R向）走右键菜单
+            Primer3Dialog.open(Primer3Dialog.MODE_PAIR);
         } else if ("save".equals(id)) {
             ExportUtils.saveTrack(this);      // v0.1.54：回写来源文件（无则弹另存为）
         } else if ("saveas".equals(id)) {

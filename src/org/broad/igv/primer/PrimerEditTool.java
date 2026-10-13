@@ -171,6 +171,29 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     private static String guideChr;
     private static int[] guides;
 
+    // ---------- v0.1.57：鼠标选区（空白处拖拽=平移+画红线，松手后保留为选区） ----------
+    // 右键「primer3 设计*」读它预填区域；单击（位移<5bp）视为取消选区。
+    private static String selChr;
+    private static int selStart, selEnd;      // 0-based，selStart <= selEnd
+    private static int pressBp;               // 空白拖拽按下时的 bp（平移起点）
+    private static String pressChr;
+
+    /** 当前鼠标选区：{chr, start0, end0} 或 null（无选区/跨染色体）。0-based，end 含。 */
+    public static String[] currentSelection() {
+        if (selChr == null) return null;
+        return new String[]{selChr, String.valueOf(selStart), String.valueOf(selEnd)};
+    }
+
+    private static void setSelection(String chr, int a, int b) {
+        selChr = chr;
+        selStart = Math.min(a, b);
+        selEnd = Math.max(a, b);
+    }
+
+    private static void clearSelection() {
+        selChr = null;
+    }
+
     public static int[] guidePositions(String chr) {
         if (!inEditMode() || guides == null) return null;
         return chr != null && chr.equals(guideChr) ? guides : null;
@@ -472,6 +495,11 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             PrimerStore.selected = null;
             PrimerStore.refresh();
         }
+        // v0.1.57：空白拖拽=平移+顺带记录选区（松手后右键「设计*」可预填）；单击不留选区
+        pressBp = bp;
+        pressChr = chr;
+        clearSelection();
+        clearGuides();          // 清掉上次松手保留的选区红线（若接着拖拽会重新画）
         panning = true;
         panTool(dp).mousePressed(e);
     }
@@ -518,6 +546,11 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     public void mouseDragged(MouseEvent e) {
         if (panning) {
             panTool((DataPanel) e.getSource()).mouseDragged(e);
+            // v0.1.57：平移的同时把「按下点到当前点」画成红线参考线（松手保留为选区）
+            ReferenceFrame f = frameOf(e);
+            if (f != null && pressChr != null && pressChr.equals(f.getChrName())) {
+                setGuides(f, pressBp, bpAt(e, f));
+            }
             return;
         }
         if (dragging == null || mode == MODE_NONE) return;
@@ -551,6 +584,16 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (panning) {
             panning = false;
             panTool((DataPanel) e.getSource()).mouseReleased(e);
+            // v0.1.57：松手落定选区（按下→松开掠过的区间）；位移<5bp 视为单击不留选区。
+            // 红线参考线保留显示（不 clearGuides），让选区可见；下次按/拖时清除。
+            if (pressChr != null) {
+                ReferenceFrame f = frameOf(e);
+                if (f != null && pressChr.equals(f.getChrName())) {
+                    int bp = bpAt(e, f);
+                    if (Math.abs(bp - pressBp) >= 5) setSelection(pressChr, pressBp, bp);
+                    else clearSelection();
+                }
+            }
             return;
         }
         if (!SwingUtilities.isLeftMouseButton(e)) return;

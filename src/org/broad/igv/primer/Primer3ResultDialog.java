@@ -38,13 +38,14 @@ public class Primer3ResultDialog {
         private final int tmplOffset;
 
         Dlg(String chr, final String group, List<Primer3Core.Pair> pairs, int tmplOffset) {
-            super(IGV.getMainFrame(), "primer3 设计结果（" + chr + " · " + pairs.size() + " 对）", true);
+            super(IGV.getMainFrame(), "primer3 设计结果（" + chr + " · " + pairs.size()
+                    + (pairs.size() == 1 && pairs.get(0).isSingle() ? " 条" : " 对") + "）", true);
             this.pairs = pairs;
             this.chr = chr;
             this.group = group;
             this.tmplOffset = tmplOffset;
 
-            String[] cols = {"选", "#", "产物bp", "F 引物序列", "R 引物序列", "Tm F/R", "GC F/R",
+            String[] cols = {"选", "#", "方向", "产物bp", "F 引物序列", "R 引物序列", "Tm F/R", "GC F/R",
                     "3'端二聚体", "位置 (F / R)"};
             model = new DefaultTableModel(cols, 0) {
                 @Override
@@ -58,27 +59,30 @@ public class Primer3ResultDialog {
                 }
             };
             for (Primer3Core.Pair p : pairs) {
-                int fs = tmplOffset + p.leftStart + 1, fe = tmplOffset + p.leftStart + p.leftLen;
-                int rs = tmplOffset + p.rightStart + 1, re = tmplOffset + p.rightStart + p.rightLen;
+                String fPos = p.leftSeq == null ? "-"
+                        : (chr + ":" + (tmplOffset + p.leftStart + 1) + "-" + (tmplOffset + p.leftStart + p.leftLen) + " (+)");
+                String rPos = p.rightSeq == null ? "-"
+                        : (chr + ":" + (tmplOffset + p.rightStart + 1) + "-" + (tmplOffset + p.rightStart + p.rightLen) + " (-)");
                 model.addRow(new Object[]{
                         Boolean.TRUE,
                         p.idx + 1,
-                        p.productSize,
-                        p.leftSeq,
-                        p.rightSeq,
-                        String.format("%.1f/%.1f", p.leftTm, p.rightTm),
-                        String.format("%.0f/%.0f", p.leftGc, p.rightGc),
+                        p.dirLabel(),
+                        p.productSize > 0 ? p.productSize : "-",
+                        p.leftSeq == null ? "-" : p.leftSeq,
+                        p.rightSeq == null ? "-" : p.rightSeq,
+                        String.format("%s/%s", fmtOr(p.leftTm), fmtOr(p.rightTm)),
+                        String.format("%s/%s", fmtOr(p.leftGc), fmtOr(p.rightGc)),
                         Double.isNaN(p.complAny) ? "-" : String.format("%.1f/%.1f", p.complAny, p.complEnd),
-                        chr + ":" + fs + "-" + fe + " (+) / " + rs + "-" + re + " (-)",
+                        fPos + " / " + rPos,
                 });
             }
 
             final JTable table = new JTable(model);
             table.setAutoCreateRowSorter(true);
             table.setRowHeight(20);
-            table.getColumnModel().getColumn(3).setPreferredWidth(150);
             table.getColumnModel().getColumn(4).setPreferredWidth(150);
-            table.getColumnModel().getColumn(8).setPreferredWidth(240);
+            table.getColumnModel().getColumn(5).setPreferredWidth(150);
+            table.getColumnModel().getColumn(9).setPreferredWidth(240);
             JScrollPane scroll = new JScrollPane(table);
             add(scroll, BorderLayout.CENTER);
 
@@ -94,7 +98,7 @@ public class Primer3ResultDialog {
             btns.add(cancel);
             add(btns, BorderLayout.SOUTH);
 
-            JLabel tip = new JLabel("加入后 F(绿,+)/R(蓝,-) 以配对线相连；引物为内存态（轨名带 *），用「另存为」可落盘为标准引物 BED");
+            JLabel tip = new JLabel("加入后引物为内存态（轨名带 *），工具条「另存为」可落盘为标准引物 BED；成对结果 F(绿,+)/R(蓝,-) 自动连线");
             tip.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
             add(tip, BorderLayout.NORTH);
 
@@ -135,10 +139,10 @@ public class Primer3ResultDialog {
                 }
             }
             if (chosen.isEmpty()) {
-                JOptionPane.showMessageDialog(this, "未勾选任何引物对", "primer3 设计结果", JOptionPane.WARNING_MESSAGE);
+                JOptionPane.showMessageDialog(this, "未勾选任何结果", "primer3 设计结果", JOptionPane.WARNING_MESSAGE);
                 return;
             }
-            // 组装 Primer（F/R 配对 + 指标），并与同分组已有引物去重名（重复设计防撞车）
+            // 组装 Primer（成对=F/R 互链；单引物=1 条固定方向），并与同分组已有引物去重名（重复设计防撞车）
             Set<String> used = new HashSet<String>();
             for (Primer p : PrimerStore.getPrimersByGroup(group)) used.add(p.name);
             List<Primer> add = new ArrayList<Primer>();
@@ -148,10 +152,16 @@ public class Primer3ResultDialog {
             dispose();
             PrimerPlugin.ensureTrackForGroup(group);
             PrimerStore.addAll(add);
+            boolean single = chosen.size() == 1 && chosen.get(0).isSingle();
             JOptionPane.showMessageDialog(this,
-                    "已加入 " + chosen.size() + " 对引物（" + add.size() + " 条）到分组「" + group + "」。\n"
+                    "已加入 " + chosen.size() + (single ? " 条引物" : " 对引物")
+                            + "（共 " + add.size() + " 条）到分组「" + group + "」。\n"
                             + "轨名带 * 表示未落盘：工具条「另存为」可保存为标准引物 BED。",
                     "primer3 设计结果", JOptionPane.INFORMATION_MESSAGE);
+        }
+
+        private static String fmtOr(double v) {
+            return Double.isNaN(v) ? "-" : String.format("%.1f", v);
         }
     }
 }
