@@ -189,16 +189,23 @@ public class ExportUtils {
         return h.toString();
     }
 
-    public static void exportPrimerFasta() {
-        File f = pick(true, "primers.fasta", "FASTA 文件", "fa");
+    public static void exportPrimerFasta() { exportPrimerFasta(null); }
+
+    /** 导出引物序列 FASTA（group==null 导出全部；否则仅导出该分组=单独导出一轨）。 */
+    public static void exportPrimerFasta(String group) {
+        String def = (group == null) ? "primers.fasta" : stripExt(group) + ".primers.fasta";
+        File f = pick(true, def, "FASTA 文件", "fa");
         if (f == null) return;
         if (!confirmOverwrite(f)) return;
         try {
+            List<Primer> list = (group == null) ? PrimerStore.getPrimers() : PrimerStore.getPrimersByGroup(group);
+            int total = list.size();
+            if (total == 0) { JOptionPane.showMessageDialog(null, "本轨没有可导出的引物。"); return; }
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
             int n = 0;
             java.util.Map<Primer, Integer> rows = null;
             try { rows = PrimerTrack.allScreenRows(); } catch (Throwable ignore) { }
-            for (Primer p : PrimerStore.getPrimers()) {
+            for (Primer p : list) {
                 String seq = primerSeq(p);
                 Integer row = (rows != null && rows.containsKey(p)) ? rows.get(p) : p.rowOverride;
                 w.write(fastaHeader(p, row));
@@ -211,6 +218,7 @@ public class ExportUtils {
             }
             w.close();
             JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath()
+                    + (group == null ? "" : "（来源：" + group + "）")
                     + "\n（header 内含坐标/分组/配对/布局行，可直接再用「导入」还原成图）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
@@ -224,8 +232,12 @@ public class ExportUtils {
 
     // ---------- 3) 测序读段（引物 + 测序延长区） ----------
 
-    public static void exportReadFasta() {
-        File f = pick(true, "reads.fasta", "FASTA 文件", "fa");
+    public static void exportReadFasta() { exportReadFasta(null); }
+
+    /** 导出测序读段 FASTA（group==null 导出全部；否则仅导出该分组=单独导出一轨）。 */
+    public static void exportReadFasta(String group) {
+        String def = (group == null) ? "reads.fasta" : stripExt(group) + ".reads.fasta";
+        File f = pick(true, def, "FASTA 文件", "fa");
         if (f == null) return;
         if (!confirmOverwrite(f)) return;
         Genome g = GenomeManager.getInstance().getCurrentGenome();
@@ -234,9 +246,11 @@ public class ExportUtils {
             return;
         }
         try {
+            List<Primer> list = (group == null) ? PrimerStore.getPrimers() : PrimerStore.getPrimersByGroup(group);
+            if (list.isEmpty()) { JOptionPane.showMessageDialog(null, "本轨没有可导出的引物。"); return; }
             BufferedWriter w = new BufferedWriter(new FileWriter(f));
             int n = 0;
-            for (Primer p : PrimerStore.getPrimers()) {
+            for (Primer p : list) {
                 int[] rr = p.readRegion();
                 int s = Math.max(0, rr[0]);
                 int e = Math.max(s, rr[1]);
@@ -253,7 +267,8 @@ public class ExportUtils {
                 n++;
             }
             w.close();
-            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物的测序读段到: " + f.getAbsolutePath());
+            JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物的测序读段到: " + f.getAbsolutePath()
+                    + (group == null ? "" : "（来源：" + group + "）"));
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }

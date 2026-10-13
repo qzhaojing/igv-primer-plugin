@@ -1230,19 +1230,30 @@ public class PrimerTrack extends AbstractTrack {
                 ExportUtils.exportBED(PrimerTrack.this.group);   // 仅导出本轨分组
             }
         }));
+        menu.add(item("导出本轨引物序列 FASTA（按方向）", new Runnable() {
+            public void run() {
+                ExportUtils.exportPrimerFasta(PrimerTrack.this.group);   // 仅导出本轨分组
+            }
+        }));
+        menu.add(item("导出本轨测序读段 FASTA（含测序长度区域）", new Runnable() {
+            public void run() {
+                ExportUtils.exportReadFasta(PrimerTrack.this.group);   // 仅导出本轨分组
+            }
+        }));
+        menu.addSeparator();
         menu.add(item("导出全部 BED", new Runnable() {
             public void run() {
                 ExportUtils.exportBED(null);   // 全部引物
             }
         }));
-        menu.add(item("导出引物序列 FASTA（按方向）", new Runnable() {
+        menu.add(item("导出全部引物序列 FASTA（按方向）", new Runnable() {
             public void run() {
-                ExportUtils.exportPrimerFasta();
+                ExportUtils.exportPrimerFasta(null);
             }
         }));
-        menu.add(item("导出测序读段 FASTA（含测序长度区域）", new Runnable() {
+        menu.add(item("导出全部测序读段 FASTA（含测序长度区域）", new Runnable() {
             public void run() {
-                ExportUtils.exportReadFasta();
+                ExportUtils.exportReadFasta(null);
             }
         }));
         menu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
