@@ -134,6 +134,9 @@ public class Primer3Core {
         }
     }
 
+    /** v0.1.60：最近一次 parse 的 primer3 EXPLAIN 诊断（无解原因：considered/ok 统计）；无则 null。 */
+    public static String lastExplain = null;
+
     /**
      * 解析 Boulder IO 输出（KEY=VALUE 行）。
      * v0.1.57：兼容单引物模式——单左/单右时 PAIR_NUM_RETURNED=0 且对侧字段整体缺失，
@@ -145,6 +148,15 @@ public class Primer3Core {
             int i = line.indexOf('=');
             if (i <= 0) continue;
             d.put(line.substring(0, i).trim(), line.substring(i + 1).trim());
+        }
+        // v0.1.60：提取 EXPLAIN 诊断（considered N, low tm N, ok N），无解时告知用户真实原因
+        lastExplain = null;
+        for (String k : new String[]{"PRIMER_LEFT_EXPLAIN", "PRIMER_RIGHT_EXPLAIN", "PRIMER_PAIR_EXPLAIN"}) {
+            String v = d.get(k);
+            if (v != null && !v.isEmpty()) {
+                String tag = k.replace("PRIMER_", "").replace("_EXPLAIN", "");
+                lastExplain = (lastExplain == null ? "" : lastExplain + "\n") + tag + ": " + v;
+            }
         }
         // 结果条数 = 成对/单左/单右各自 NUM_RETURNED 的最大值（单引物模式 PAIR_N=0）
         int n = 0;

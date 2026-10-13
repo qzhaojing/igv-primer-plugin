@@ -472,13 +472,16 @@ public class Primer3Dialog {
                 } else {
                     params.put("PRIMER_PICK_LEFT_PRIMER", "1");
                     params.put("PRIMER_PICK_RIGHT_PRIMER", "1");
-                    // v0.1.59：简单模式产物区间即 SEQUENCE_TARGET，primer3 要求产物覆盖 target，
-                    // target 长于产物上限时必然无解（截图高频场景）——自动放大上限并提示
+                    // v0.1.60：简单模式产物区间即 SEQUENCE_TARGET。primer3 语义=产物必须**覆盖**整个
+                    // target（不是重叠），故最小产物 = target长 + 两侧引物长；上限放到 tLen 甚至
+                    // tLen 以内都必然无解。上限自适应为 tLen + 2×最长引物，并提示。
                     if (!adv) {
                         int tLen = e - (s - 1);
-                        if (tLen > prodMax) {
-                            prodMax = tLen;
-                            statusL.setText("提示: 产物区间 " + tLen + "bp 超过原产物上限，已自动放大为 " + tLen + "bp");
+                        int needMax = tLen + 2 * lenMax;
+                        if (prodMax < needMax) {
+                            prodMax = needMax;
+                            statusL.setText("提示: 产物上限已放大为 " + prodMax
+                                    + "bp（覆盖 " + tLen + "bp 区间 + 两侧引物最长各 " + lenMax + "bp）");
                         }
                     }
                     params.put("PRIMER_PRODUCT_SIZE_RANGE", prodMin + "-" + prodMax);
@@ -534,9 +537,18 @@ public class Primer3Dialog {
                 // ---- 调 primer3 ----
                 List<Primer3Core.Pair> pairs = Primer3Core.design(group + "_" + chr, seq, params);
                 if (pairs.isEmpty()) {
-                    JOptionPane.showMessageDialog(this,
-                            "primer3 未找到合适" + (single ? "引物" : "引物对") + "。\n可尝试：放宽 Tm/GC 范围、"
-                                    + (single ? "扩大区域" : "增大产物范围、扩大区域") + "、减少约束。",
+                    // v0.1.60：附带 primer3 EXPLAIN 诊断（considered/ok 统计），不再只说"放宽参数"
+                    StringBuilder tip = new StringBuilder();
+                    tip.append("<html>primer3 未找到合适").append(single ? "引物" : "引物对").append("。<br>");
+                    if (Primer3Core.lastExplain != null) {
+                        for (String ln : Primer3Core.lastExplain.split("\n"))
+                            tip.append(ln).append("<br>");
+                        tip.append("<br>");
+                    }
+                    tip.append("可尝试：放宽 Tm/GC 范围、")
+                       .append(single ? "扩大区域" : "增大产物范围、扩大区域")
+                       .append("、调整高级参数（盐浓度/二聚体阈值）。</html>");
+                    JOptionPane.showMessageDialog(this, tip.toString(),
                             "primer3 设计", JOptionPane.WARNING_MESSAGE);
                     return;
                 }
