@@ -613,7 +613,8 @@ public class PrimerTrack extends AbstractTrack {
 
     private static void runOnEDT(Runnable r) {
         if (SwingUtilities.isEventDispatchThread()) r.run();
-        else SwingUtilities.invokeLater(r);
+        // v0.1.63：headless（单元测试）下 invokeLater 会抛 HeadlessException，吞掉不影响功能
+        else try { SwingUtilities.invokeLater(r); } catch (Throwable ignore) { }
     }
 
     private static void repaintTrackOnly(PrimerTrack t) {
@@ -1041,6 +1042,20 @@ public class PrimerTrack extends AbstractTrack {
                         return;
                     }
                     PrimerStore.unpairForSelected(hit);
+                }
+            }));
+            // v0.1.63：修复同组编号配对——primer3 设计结果按 P{n}_F↔P{n}_R 严格配对，
+            // 误连（Ctrl+点击/历史错边）导致 F 连了别的编号 R 时一键重建
+            menu.add(item("修复同组编号配对（P编号_F↔_R 重建）", new Runnable() {
+                public void run() {
+                    int fixed = PrimerStore.repairNumberedPairs(hit.group);
+                    if (fixed > 0) {
+                        JOptionPane.showMessageDialog(null,
+                                "已重建 " + fixed + " 对编号配对（同编号 F↔R 单边，其余旧边已清除）。\n"
+                                + "单侧编号（单引物设计）与非 P 编号命名（手动多重 PCR）未改动。");
+                    } else {
+                        JOptionPane.showMessageDialog(null, "未发现需要修复的编号配对（或本组无 P编号_F/_R 命名）。");
+                    }
                 }
             }));
             // v8：颜色一行 12 常用色，点击即换该引物颜色

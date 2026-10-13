@@ -140,6 +140,7 @@ public class PrimerSession {
                 List<Primer> list = (List<Primer>) en[1];
                 PrimerPlugin.ensureTrackForGroup(g);
                 PrimerStore.addAll(list);
+                PrimerStore.repairNumberedPairs(g);   // v0.1.63：session 恢复同样自愈编号配对
             }
             PrimerPlugin.ensureFallbackTrack();     // 保证「导入 BED」入口永在
             PrimerStore.refreshAll();

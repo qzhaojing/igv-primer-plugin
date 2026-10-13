@@ -60,6 +60,7 @@ public class PrimerStore {
     }
 
     public static synchronized void add(Primer p) {
+        if (p != null) dedupNames(java.util.Arrays.asList(p));   // v0.1.63：重名防护（防按名寻址连错实例）
         primers.add(p);
         linkByName(p);
         refreshSequence(p);
@@ -83,6 +84,7 @@ public class PrimerStore {
     }
 
     public static synchronized void addAll(List<Primer> list) {
+        dedupNames(list);   // v0.1.63：重名防护（防按名寻址连错实例）
         primers.addAll(list);
         for (Primer p : list) {
             refreshSequence(p);   // v0.1.43：导入/恢复也要刷序列与指标（否则 p.seq 空 → 编辑框/导出 FASTA 全空）
@@ -445,9 +447,109 @@ public class PrimerStore {
                 if (q != p && nm.equals(q.name)) {
                     if (q.pairedWith == null) q.pairedWith = new java.util.LinkedHashSet<String>();
                     q.pairedWith.add(p.name);   // 保证边对称
+                    break;   // v0.1.63：同名多实例时只连第一个——否则每个同名副本都被加边，边必炸
                 }
             }
         }
+    }
+
+    /**
+     * v0.1.63：同组编号配对修复（primer3 设计结果专用）。
+     * 背景：P{n}_F/P{n}_R 是设计时同批生成的配对，但 Ctrl+点击误连 / BED 导入带入的历史错边，
+     * 会让 F 连到别的编号的 R（实例：P3_F 连了 P1_R/P2_R/P4_R，同编号 P3_R 反而孤立）。
+     * 保守规则（只修高置信度错误，不误伤合法用法）：
+     *  - 仅处理名字匹配 {@code <前缀>_P<数字>_F / _R} 的引物；
+     *  - 同一编号 F、R 都存在 → 清掉双方全部旧边，重建唯一 F↔R 边；
+     *  - 编号只有单侧 → 不动（单引物设计结果）；
+     *  - 非该命名风格（如 Rv0678-6 手动多重 PCR 的 1 对多）→ 完全不碰。
+     * 返回修复的编号数（0=无需修复）。
+     */
+    public static synchronized int repairNumberedPairs(String group) {
+        java.util.Map<Integer, Primer> fs = new java.util.LinkedHashMap<Integer, Primer>();
+        java.util.Map<Integer, Primer> rs = new java.util.LinkedHashMap<Integer, Primer>();
+        for (Primer p : primers) {
+            if (group == null ? p.group != null : !group.equals(p.group)) continue;
+            int[] nn = parseNumbered(p.name);
+            if (nn == null) continue;
+            (nn[1] > 0 ? fs : rs).put(nn[0], p);
+        }
+        int fixed = 0;
+        for (java.util.Map.Entry<Integer, Primer> en : fs.entrySet()) {
+            Primer f = en.getValue();
+            Primer r = rs.get(en.getKey());
+            if (r == null) continue;                      // 单侧：单引物设计，保持原样
+            boolean ok = f.pairedWith != null && f.pairedWith.size() == 1 && f.pairedWith.contains(r.name)
+                    && r.pairedWith != null && r.pairedWith.size() == 1 && r.pairedWith.contains(f.name);
+            if (ok) continue;                             // 已是正确单边
+            dropAllEdges(f);
+            dropAllEdges(r);
+            if (f.pairedWith == null) f.pairedWith = new java.util.LinkedHashSet<String>();
+            if (r.pairedWith == null) r.pairedWith = new java.util.LinkedHashSet<String>();
+            f.pairedWith.add(r.name);
+            r.pairedWith.add(f.name);
+            fixed++;
+        }
+        if (fixed > 0) {
+            resetDimerFlags();
+            refresh();
+            autosave(true);
+        }
+        return fixed;
+    }
+
+    /** 解析 {@code <前缀>_P<数字>_F/_R} → {编号, +1/-1}；非该风格返回 null。 */
+    static int[] parseNumbered(String name) {
+        if (name == null) return null;
+        int i = name.lastIndexOf("_P");
+        if (i < 0) return null;
+        int j = i + 2, k = j;
+        while (k < name.length() && Character.isDigit(name.charAt(k))) k++;
+        if (k == j || k + 2 != name.length()) return null;   // 数字后必须恰为 _F/_R
+        if (name.charAt(k) != '_') return null;
+        char d = name.charAt(k + 1);
+        if (d != 'F' && d != 'R') return null;
+        try {
+            return new int[]{Integer.parseInt(name.substring(j, k)), d == 'F' ? 1 : -1};
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 清掉 p 的全部边（双向：同时从每个对端的 pairedWith 移除 p.name）。 */
+    private static void dropAllEdges(Primer p) {
+        if (p.pairedWith == null) return;
+        for (String nm : new java.util.ArrayList<String>(p.pairedWith)) {
+            Primer q = byName(nm);
+            if (q != null && q != p && q.pairedWith != null) q.pairedWith.remove(p.name);
+        }
+        p.pairedWith.clear();
+    }
+
+    /** 按名字找引物（重名返回第一个）。 */
+    private static Primer byName(String name) {
+        for (Primer q : primers) if (name.equals(q.name)) return q;
+        return null;
+    }
+
+    /**
+     * v0.1.63：入列前去重——store 内已存在的名字自动加 _2/_3 后缀并占用。
+     * 根因：pairedWith 按名字寻址，一旦出现同名引物，linkByName/渲染的 nameMap 都会连到
+     * 错误实例（幽灵连线的放大器）。used 集合失效的路径（BED 导入分组名不匹配等）曾让
+     * 同名引物叠加进 store。
+     */
+    private static int dedupNames(List<Primer> list) {
+        java.util.Set<String> used = new java.util.HashSet<String>();
+        for (Primer p : primers) if (p.name != null) used.add(p.name);
+        int renamed = 0;
+        for (Primer p : list) {
+            if (p.name == null) continue;
+            if (used.add(p.name)) continue;
+            for (int i = 2; i < 1000; i++) {
+                String c = p.name + "_" + i;
+                if (used.add(c)) { p.name = c; renamed++; break; }
+            }
+        }
+        return renamed;
     }
 
     /** 按名称列表配对（编辑框保存 / 新建时调用）：p 与每个异链且能形成 PCR 产物的同名引物各加一条独立边（1:N 自然支持）。 */

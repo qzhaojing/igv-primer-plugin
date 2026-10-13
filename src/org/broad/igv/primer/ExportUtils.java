@@ -156,6 +156,9 @@ public class ExportUtils {
             java.util.Set<String> groups = new java.util.HashSet<String>();
             for (Primer p : all) groups.add(p.group);
             for (String g : groups) PrimerPlugin.ensureTrackForGroup(g);
+            // v0.1.63：恢复后自愈——primer3 设计结果的编号配对（P{n}_F↔P{n}_R）曾被 Ctrl+点击
+            // 误连/历史错边破坏的，按编号重建；只影响 P 编号命名，手动多重 PCR 不碰
+            for (String g : groups) PrimerStore.repairNumberedPairs(g);
             PrimerStore.refreshAll();
             return n;
         } catch (Exception ignore) {
