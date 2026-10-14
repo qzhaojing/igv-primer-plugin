@@ -8,6 +8,7 @@ import javax.swing.*;
 import java.awt.*;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -18,7 +19,8 @@ import java.util.Map;
  *  - 成对（MODE_PAIR）：简单=产物区间（SEQUENCE_TARGET，上下游自动找）；高级=上下游双区
  *    （SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 产物区间白名单，左引物落上游侧、右引物落下游侧）；
  *  - 单引物 F 向（MODE_LEFT）/ R 向（MODE_RIGHT）：指定一个区域，引物必须落在选区内
- *    （SEQUENCE_INCLUDED_REGION 限定搜索范围 + SEQUENCE_TARGET 中段吸引）。
+ *    （SEQUENCE_INCLUDED_REGION 限定搜索范围；v0.1.69 起不再发 SEQUENCE_TARGET——
+ *    primer3 语义=引物不得覆盖 target，窄选区下会把全部候选判 overlap target 而 ok 0）。
  * 打开时自动读取 PrimerEditTool 的鼠标选区（空白处拖拽掠过区间）预填 chr 与起止。
  * 坐标输入均为 IGV 惯例 1-based inclusive。
  *
@@ -41,6 +43,18 @@ import java.util.Map;
  *  - 模板容量检查 need 同步重算（旧公式 prodMax+2×lenMax 会在新 prodMax 下误报）；
  *  - 无解弹窗按 EXPLAIN 统计动态生成建议（GC/tm/产物范围/二聚体哪个失败多优先建议哪个）。
  *
+ * v0.1.69：
+ *  - 单引物误发 SEQUENCE_TARGET 修复：primer3 语义=引物不得覆盖 target，窄选区（如 19bp）
+ *    下 18nt 候选仅 2 个且全部 overlap target → ok 0（老板截图实锤）。单引物只发
+ *    SEQUENCE_INCLUDED_REGION；
+ *  - 降条件自动重试（relaxAt 阶梯，默认开）：primer3 返回 0 对时逐级放宽筛选参数重试，
+ *    6 级阶梯（Tm±2 → Tm±4+GC±5 → 放宽引物长 → 删组成约束 → 删二聚体约束 → 极限），
+ *    成功后弹窗逐项明示"原始条件 → 降级后条件"+ 风险提示；区域约束（INCLUDED_REGION/
+ *    TARGET/OK_REGION_LIST）永不动，引物必须落在选区内这条不变；
+ *  - explainTips 扩展解析 "overlap target 2" 这类无 failed 后缀的统计词；
+ *  - 无选区快捷设计：open(mode, quick) 无视选区按视口中心取 100bp 作引物区
+ *    （"很多引物无法选区时想获得一个引物"的兜底路径）。
+ *
  * 参数只暴露常用项（长度/Tm/GC/产物范围/返回对数），预设一键填充；高级参数走默认值。
  */
 public class Primer3Dialog {
@@ -49,6 +63,13 @@ public class Primer3Dialog {
     public static final int MODE_LEFT = 1;    // 仅 F 向（+）
     public static final int MODE_RIGHT = 2;   // 仅 R 向（-）
 
+    /** v0.1.69："reason N" 统计段（primer3 EXPLAIN 无 failed 后缀的淘汰计数）。 */
+    private static final java.util.regex.Pattern PLAIN_STAT =
+            java.util.regex.Pattern.compile("^([A-Za-z][A-Za-z ]*?)\\s+(\\d+)$");
+
+    /** v0.1.69：降级阶梯最大级数（1..6；0=不降级）。 */
+    public static final int MAX_RELAX_LEVEL = 6;
+
     /** 入口：打开设计对话框（默认成对）。 */
     public static void open() {
         open(MODE_PAIR);
@@ -56,13 +77,34 @@ public class Primer3Dialog {
 
     /** 入口：打开设计对话框；有鼠标选区时自动预填。 */
     public static void open(int mode) {
+        open(mode, false);
+    }
+
+    /**
+     * v0.1.69：quick=true 无视鼠标选区，按当前视口中心取 100bp 作引物区/产物区
+     * （"很多引物无法选区时想获得一个引物"的兜底路径；配合降级阶梯保证有产出）。
+     */
+    public static void open(int mode, boolean quick) {
         if (!Primer3Core.available()) {
             JOptionPane.showMessageDialog(IGV.getMainFrame(),
                     "primer3_core.exe 不可用（jar 资源缺失或无法释放到 ~/.igv_primer3/）。",
                     "primer3 设计", JOptionPane.ERROR_MESSAGE);
             return;
         }
-        new Dlg(mode).setVisible(true);
+        new Dlg(mode, quick).setVisible(true);
+    }
+
+    /**
+     * v0.1.69：快速设计区域——视口中段取 wantLen bp（0-based 视野，返回 1-based inclusive 起止）。
+     * 纯计算无 IO，便于测试；视野窄于 wantLen 时退化为整个视野。
+     */
+    public static int[] quickCenterRegion(int vpS0, int vpE0, int wantLen) {
+        if (vpE0 - vpS0 <= wantLen) return new int[]{vpS0 + 1, vpE0};
+        int mid = (vpS0 + vpE0 - 1) / 2;
+        int qs = Math.max(vpS0, mid - wantLen / 2);
+        int qe = qs + wantLen - 1;
+        if (qe > vpE0 - 1) { qe = vpE0 - 1; qs = qe - wantLen + 1; }
+        return new int[]{qs + 1, qe + 1};
     }
 
     /**
@@ -135,6 +177,122 @@ public class Primer3Dialog {
         int mid = (s0 + e0) / 2;
         int ns = Math.max(s0, mid - maxLen / 2);
         return new int[]{ns, ns + maxLen};
+    }
+
+    // ---- v0.1.69：降条件自动重试（relax ladder） ----
+
+    /** 组成类约束（L4 起删除）：多聚X / GC钳 / 3'端GC数 / 允许N数。 */
+    private static final String[] COMPOSITION_KEYS = {
+            "PRIMER_MAX_POLY_X", "PRIMER_GC_CLAMP", "PRIMER_MAX_END_GC", "PRIMER_MAX_NS_ACCEPTED"};
+    /** 二聚体/发夹类约束（L5 起删除）。 */
+    private static final String[] DIMER_KEYS = {
+            "PRIMER_MAX_COMPL_ANY_TH", "PRIMER_MAX_COMPL_END_TH", "PRIMER_MAX_HAIRPIN_TH",
+            "PRIMER_MAX_SELF_ANY_TH", "PRIMER_MAX_SELF_END_TH"};
+
+    /** 约束 tag → 中文名（降级明示用）。 */
+    private static final java.util.Map<String, String> CN_NAME =
+            new java.util.LinkedHashMap<String, String>();
+    static {
+        CN_NAME.put("PRIMER_MAX_POLY_X", "多聚X上限");
+        CN_NAME.put("PRIMER_GC_CLAMP", "3' GC钳位");
+        CN_NAME.put("PRIMER_MAX_END_GC", "3'端GC数上限");
+        CN_NAME.put("PRIMER_MAX_NS_ACCEPTED", "允许N个数");
+        CN_NAME.put("PRIMER_MAX_COMPL_ANY_TH", "引物二聚体(ANY)阈值");
+        CN_NAME.put("PRIMER_MAX_COMPL_END_TH", "引物二聚体(3'端)阈值");
+        CN_NAME.put("PRIMER_MAX_HAIRPIN_TH", "发夹阈值");
+        CN_NAME.put("PRIMER_MAX_SELF_ANY_TH", "自互补(ANY)阈值");
+        CN_NAME.put("PRIMER_MAX_SELF_END_TH", "自互补(3'端)阈值");
+        CN_NAME.put("PRIMER_OPT_SIZE", "最优引物长偏好");
+        CN_NAME.put("PRIMER_OPT_TM", "最优Tm偏好");
+    }
+
+    /** v0.1.69：一级降级结果（放宽后的参数副本 + 人类可读的放宽描述列表）。 */
+    public static class Relaxed {
+        public final Map<String, String> params;
+        public final List<String> descs;
+
+        Relaxed(Map<String, String> params, List<String> descs) {
+            this.params = params;
+            this.descs = descs;
+        }
+    }
+
+    private static int intOf(Map<String, String> p, String k, int def) {
+        try { return Integer.parseInt(p.get(k).trim()); } catch (Exception e) { return def; }
+    }
+
+    /**
+     * v0.1.69：降级阶梯——计算第 level 级（1..{@link #MAX_RELAX_LEVEL}）放宽后的参数。
+     * 每级相对**原始**参数定义（非递进解析，纯函数可测）；level 无效时原样返回、无描述。
+     *
+     * <p>只放宽筛选参数（Tm/GC/长度/组成约束/二聚体约束）；区域约束
+     * （SEQUENCE_INCLUDED_REGION / SEQUENCE_TARGET / SEQUENCE_PRIMER_PAIR_OK_REGION_LIST /
+     * PRIMER_PRODUCT_SIZE_RANGE / PRIMER_PICK_*）与 Tm 计算基础（盐浓度等）永不动——
+     * “引物必须落在选区内”这条不变。</p>
+     *
+     * <p>阶梯（相对原始值）：L1 Tm±2℃；L2 Tm±4℃+GC±5%；L3 +引物长 min-3(≥15)/max+3；
+     * L4 +删组成约束；L5 +删二聚体/发夹约束；L6 极限（Tm±10 限40..80 / GC 10-90 /
+     * 长 15-40 / 删全部约束+删 OPT 偏好）。</p>
+     */
+    public static Relaxed relaxAt(Map<String, String> base, int level) {
+        Map<String, String> p = new LinkedHashMap<String, String>(base);
+        List<String> descs = new ArrayList<String>();
+        if (level < 1 || level > MAX_RELAX_LEVEL) return new Relaxed(p, descs);
+
+        int tmMin = intOf(p, "PRIMER_MIN_TM", 57), tmMax = intOf(p, "PRIMER_MAX_TM", 63);
+        int gcMin = intOf(p, "PRIMER_MIN_GC", 30), gcMax = intOf(p, "PRIMER_MAX_GC", 70);
+        int lenMin = intOf(p, "PRIMER_MIN_SIZE", 18), lenMax = intOf(p, "PRIMER_MAX_SIZE", 27);
+
+        // --- Tm（L1 起 ±2，L2 起 ±4，L6 极限 ±10，夹在 40..80）---
+        int tmDn = level >= 2 ? 4 : 2, tmUp = tmDn;
+        if (level >= MAX_RELAX_LEVEL) { tmDn = 10; tmUp = 10; }
+        int nTmMin = Math.max(40, tmMin - tmDn), nTmMax = Math.min(80, tmMax + tmUp);
+        if (nTmMin != tmMin || nTmMax != tmMax) {
+            p.put("PRIMER_MIN_TM", String.valueOf(nTmMin));
+            p.put("PRIMER_MAX_TM", String.valueOf(nTmMax));
+            descs.add("Tm 范围 " + tmMin + "–" + tmMax + "℃ → " + nTmMin + "–" + nTmMax + "℃");
+        }
+        // --- GC（L2 起 ±5，L6 极限 10-90）---
+        if (level >= 2) {
+            int nGcMin = Math.max(10, gcMin - 5), nGcMax = Math.min(90, gcMax + 5);
+            if (level >= MAX_RELAX_LEVEL) { nGcMin = 10; nGcMax = 90; }
+            if (nGcMin != gcMin || nGcMax != gcMax) {
+                p.put("PRIMER_MIN_GC", String.valueOf(nGcMin));
+                p.put("PRIMER_MAX_GC", String.valueOf(nGcMax));
+                descs.add("GC% 范围 " + gcMin + "–" + gcMax + " → " + nGcMin + "–" + nGcMax);
+            }
+        }
+        // --- 引物长（L3 起 min-3 限≥15 / max+3，L6 极限 15-40）---
+        if (level >= 3) {
+            int nLenMin = Math.max(15, lenMin - 3), nLenMax = Math.min(40, lenMax + 3);
+            if (level >= MAX_RELAX_LEVEL) { nLenMin = 15; nLenMax = 40; }
+            if (nLenMin != lenMin || nLenMax != lenMax) {
+                p.put("PRIMER_MIN_SIZE", String.valueOf(nLenMin));
+                p.put("PRIMER_MAX_SIZE", String.valueOf(nLenMax));
+                descs.add("引物长 " + lenMin + "–" + lenMax + "nt → " + nLenMin + "–" + nLenMax + "nt");
+            }
+        }
+        // --- 组成约束（L4 起删）---
+        if (level >= 4) {
+            for (String k : COMPOSITION_KEYS) {
+                String v = p.remove(k);
+                if (v != null) descs.add("取消组成约束：" + CN_NAME.get(k) + "（原=" + v + "）");
+            }
+        }
+        // --- 二聚体/发夹约束（L5 起删）---
+        if (level >= 5) {
+            for (String k : DIMER_KEYS) {
+                String v = p.remove(k);
+                if (v != null) descs.add("取消二聚体/发夹阈值：" + CN_NAME.get(k) + "（原=" + v + "）");
+            }
+        }
+        // --- L6 极限：删 OPT 偏好 ---
+        if (level >= MAX_RELAX_LEVEL) {
+            for (String k : new String[]{"PRIMER_OPT_SIZE", "PRIMER_OPT_TM"}) {
+                if (p.remove(k) != null) descs.add("取消" + CN_NAME.get(k));
+            }
+        }
+        return new Relaxed(p, descs);
     }
 
     /**
@@ -275,19 +433,38 @@ public class Primer3Dialog {
      * v0.1.62：解析 primer3 EXPLAIN 统计，按失败数量降序给出可操作建议。
      * 输入形如 "LEFT: considered 985, GC content failed 598, low tm 11, ok 86"。
      * 只统计 "xxx failed N" 段；无统计时返回空串（调用方回落到通用建议）。
+     *
+     * v0.1.69：扩展解析无 failed 后缀的统计段——primer3 单引物 explain 用
+     * "LEFT: considered 2, overlap target 2, ok 0"（overlap target 是计数不是 failed），
+     * 成对有 "unacceptable product size 1234"。这些段同样反映淘汰原因，
+     * 按 "reason N" 解析（跳过 considered/ok 这两个非淘汰统计）。
      */
-    static String explainTips(String explain, boolean single) {
+    public static String explainTips(String explain, boolean single) {
         java.util.Map<String, Long> fail = new java.util.LinkedHashMap<String, Long>();
         for (String ln : explain.split("\n")) {
             for (String seg : ln.split(",")) {
                 seg = seg.trim();
                 int idx = seg.indexOf(" failed ");
-                if (idx < 0) continue;
-                String reason = seg.substring(0, idx).trim();
+                if (idx >= 0) {
+                    String reason = seg.substring(0, idx).trim();
+                    int c = reason.indexOf(':');
+                    if (c >= 0) reason = reason.substring(c + 1).trim();
+                    try {
+                        long n = Long.parseLong(seg.substring(idx + 8).trim());
+                        Long old = fail.get(reason);
+                        fail.put(reason, old == null ? n : old + n);
+                    } catch (NumberFormatException ignore) { }
+                    continue;
+                }
+                // v0.1.69："reason N" 统计段（无 failed 后缀），如 "overlap target 2"
+                java.util.regex.Matcher m = PLAIN_STAT.matcher(seg);
+                if (!m.matches()) continue;
+                String reason = m.group(1).trim();
                 int c = reason.indexOf(':');
                 if (c >= 0) reason = reason.substring(c + 1).trim();
+                if (reason.equalsIgnoreCase("considered") || reason.equalsIgnoreCase("ok")) continue;
                 try {
-                    long n = Long.parseLong(seg.substring(idx + 8).trim());
+                    long n = Long.parseLong(m.group(2));
                     Long old = fail.get(reason);
                     fail.put(reason, old == null ? n : old + n);
                 } catch (NumberFormatException ignore) { }
@@ -316,6 +493,8 @@ public class Primer3Dialog {
     /** v0.1.62：primer3 EXPLAIN 原因词 → 对话框里的可操作建议（无匹配返回 null）。 */
     private static String tipFor(String reason, boolean single) {
         if (reason.contains("product size")) return "减小「产物 min」/ 增大「产物 max」（上限已自动放到模板可达范围）";
+        // v0.1.69：单引物窄选区 ok 0 的典型 explain（引物不得覆盖 SEQUENCE_TARGET）
+        if (reason.contains("overlap target")) return "引物与目标区重叠：缩小/去掉目标区，或扩大引物区域让引物有处可放（v0.1.69 起单引物已不再发 SEQUENCE_TARGET）";
         if (reason.contains("GC content")) return "放宽 GC 范围（如 20%-80%）";
         if (reason.contains("low tm")) return "提高 Tm 下限（如 55℃）";
         if (reason.contains("high tm")) return "提高 Tm 上限（如 65℃）";
@@ -331,6 +510,7 @@ public class Primer3Dialog {
 
     private static class Dlg extends JDialog {
         private final int mode;   // MODE_PAIR / MODE_LEFT / MODE_RIGHT
+        private final boolean quick;   // v0.1.69：快速设计（无视选区，视口中心取 100bp）
         private final JComboBox modeBox = new JComboBox(new String[]{"简单：指定产物区间", "高级：分别指定上/下游区"});
         private final JTextField chrF = new JTextField(6);
         private final JTextField groupF = new JTextField("primer3", 10);
@@ -377,10 +557,17 @@ public class Primer3Dialog {
         private final JPanel advPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 0));
         private final JPanel advParams = new JPanel(new GridLayout(3, 10, 4, 2));  // v0.1.59 高级参数（默认折叠）
         private final JLabel statusL = new JLabel(" ");
+        // v0.1.69：0 对时自动降级重试（默认开；区域约束不动，成功后明示放宽内容+风险）
+        private final JCheckBox relaxChk = new JCheckBox("0 对时自动降级重试（最多 6 级，逐级放宽并明示）", true);
 
         Dlg(int mode) {
+            this(mode, false);
+        }
+
+        Dlg(int mode, boolean quick) {
             super(IGV.getMainFrame(), titleOf(mode), true);
             this.mode = mode;
+            this.quick = quick;
             boolean single = (mode != MODE_PAIR);
             setLayout(new BorderLayout(6, 6));
 
@@ -393,6 +580,7 @@ public class Primer3Dialog {
             String[] sel = PrimerEditTool.currentSelection();
             String[] vp = currentViewRange();
             if (sel != null && vp != null && !sel[0].equals(vp[0])) sel = null;
+            if (quick) sel = null;   // v0.1.69：快速设计无视选区，按视口中心取区域
             String[] chrSrc = sel != null ? sel : vp;
             chrF.setText(chrSrc != null ? chrSrc[0] : (PrimerStore.lastChr == null ? "" : PrimerStore.lastChr));
             top.add(chrF);
@@ -496,6 +684,31 @@ public class Primer3Dialog {
                 int s0 = Integer.parseInt(vp[1]);
                 int e0 = Integer.parseInt(vp[2]);
                 if (s0 > e0) { int t = s0; s0 = e0; e0 = t; }
+                // v0.1.69：快速设计——视口中心取 100bp 作引物区/产物区（不内缩、不侧翼），
+                // 成对时上下游=产物两侧 100~200bp；随后跳过视口子集填充。
+                boolean quickFilled = false;
+                if (quick) {
+                    int qMin = 18;
+                    try { qMin = Integer.parseInt(lenMinF.getText().trim()); } catch (Exception ignore) {}
+                    int[] q = quickCenterRegion(s0, e0, 100);
+                    tStartF.setText(String.valueOf(q[0]));
+                    tEndF.setText(String.valueOf(q[1]));
+                    if (!single) {
+                        int[] f = fillFromSelection(q[0] - 1, q[1] - 1, 0, Integer.MAX_VALUE,
+                                qMin, 100, 200, 27);
+                        uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
+                        dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
+                        modeBox.setSelectedIndex(1);   // 成对：显示上下游框
+                        simplePanel.setVisible(true);
+                        advPanel.setVisible(true);
+                    }
+                    statusL.setText("<html><font color='gray'>⚡ 快速设计：已取视口中心 100bp 作"
+                            + (single ? "引物区" : "产物区") + "（" + q[0] + "-" + q[1] + "）"
+                            + (single ? "" : "，上下游=两侧 100–200bp")
+                            + "；若 0 对将自动降级条件重试</font></html>");
+                    quickFilled = true;
+                }
+                if (!quickFilled) {
                 int lenMin0 = 18;
                 try { lenMin0 = Integer.parseInt(lenMinF.getText().trim()); } catch (Exception ignore) {}
                 int lenMax0 = readBounded(lenMaxF, 27, 1, 1000);
@@ -524,6 +737,7 @@ public class Primer3Dialog {
                     statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：上下游引物区已超出当前屏幕"
                             + "（为保住可设计性未强行压成 minLen 小区间）。设计出的引物可能在屏幕外——"
                             + "缩放即可见；或放大视野后重新打开本对话框。</font></html>");
+                }
                 }
             }
 
@@ -614,7 +828,11 @@ public class Primer3Dialog {
             // ---- 按钮 ----
             JButton go = new JButton("设计");
             JButton cancel = new JButton("取消");
+            relaxChk.setToolTipText("<html>primer3 返回 0 对时，按 6 级阶梯自动放宽筛选条件重试：<br>"
+                    + "L1 Tm±2℃ → L2 +GC±5% → L3 +放宽引物长 → L4 +取消组成约束 → L5 +取消二聚体阈值 → L6 极限。<br>"
+                    + "区域约束（引物必须落在选区内）永远不变；成功后弹窗逐项明示放宽内容与风险。</html>");
             JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 4));
+            btns.add(relaxChk);
             btns.add(go);
             btns.add(cancel);
             add(btns, BorderLayout.SOUTH);
@@ -822,12 +1040,13 @@ public class Primer3Dialog {
                 if (single || !adv) {
                     int s0 = s - 1;
                     if (single) {
-                        // 引物必须落在选区内：INCLUDED_REGION 限定搜索范围；
-                        // SEQUENCE_TARGET 取选区中段（≤20bp）吸引引物靠近中部
-                        int tLen = Math.min(e - s0, 20);
-                        int tStart = s0 + (e - s0 - tLen) / 2;
+                        // 引物必须落在选区内：INCLUDED_REGION 限定搜索范围。
+                        // v0.1.69：删除原来补发的 SEQUENCE_TARGET（选区中段 ≤20bp）——
+                        // primer3 语义=引物**不得覆盖** target，窄选区（如 19bp 放 18nt 引物
+                        // 仅 2 个候选位）下全部候选被判 overlap target → ok 0
+                        // （老板截图实锤 "LEFT: considered 2, overlap target 2, ok 0"）。
+                        // 单引物的诉求就是"落在选区内"，INCLUDED_REGION 已足够。
                         params.put("SEQUENCE_INCLUDED_REGION", (s0 - tmplStart) + "," + (e - s0));
-                        params.put("SEQUENCE_TARGET", (tStart - tmplStart) + "," + tLen);
                     } else {
                         params.put("SEQUENCE_TARGET", (s0 - tmplStart) + "," + (e - s0));
                     }
@@ -874,11 +1093,25 @@ public class Primer3Dialog {
                     statusL.setText("警告: 模板含 N 比例 " + (nCount * 100 / seq.length()) + "%，设计结果可能不理想");
 
                 // ---- 调 primer3 ----
-                List<Primer3Core.Pair> pairs = Primer3Core.design(group + "_" + chr, seq, params);
+                String p3id = group + "_" + chr;
+                List<Primer3Core.Pair> pairs = Primer3Core.design(p3id, seq, params);
+                // v0.1.69：降条件自动重试——原始条件 0 对时逐级放宽筛选参数
+                // （区域约束不动），直到出结果或 6 级用尽。
+                int relaxUsed = 0;
+                List<String> relaxDescs = null;
+                if (pairs.isEmpty() && relaxChk.isSelected()) {
+                    for (int lv = 1; lv <= MAX_RELAX_LEVEL && pairs.isEmpty(); lv++) {
+                        Primer3Dialog.Relaxed r = relaxAt(params, lv);
+                        pairs = Primer3Core.design(p3id, seq, r.params);
+                        if (!pairs.isEmpty()) { relaxUsed = lv; relaxDescs = r.descs; }
+                    }
+                }
                 if (pairs.isEmpty()) {
                     // v0.1.60：附带 primer3 EXPLAIN 诊断（considered/ok 统计），不再只说"放宽参数"
                     StringBuilder tip = new StringBuilder();
                     tip.append("<html>primer3 未找到合适").append(single ? "引物" : "引物对").append("。<br>");
+                    if (relaxChk.isSelected())
+                        tip.append("（已自动降级重试至第 ").append(MAX_RELAX_LEVEL).append(" 级条件仍未找到）<br>");
                     if (Primer3Core.lastExplain != null) {
                         for (String ln : Primer3Core.lastExplain.split("\n"))
                             tip.append(ln).append("<br>");
@@ -896,6 +1129,24 @@ public class Primer3Dialog {
                     return;
                 }
                 dispose();
+                // v0.1.69：降级成功——逐项明示"原始条件 → 降级后条件"+ 风险提示
+                // （老板要求"让用户明晰自己选择的时候是降低到什么条件了，还有风险提示"）
+                if (relaxUsed > 0) {
+                    StringBuilder w = new StringBuilder();
+                    w.append("<html><b>⚠ 原始条件未找到合适").append(single ? "引物" : "引物对")
+                     .append("，已自动降级到第 ").append(relaxUsed).append(" 级条件后找到。</b><br><br>")
+                     .append("<b>第 ").append(relaxUsed).append(" 级放宽内容（相对原始条件）：</b><br>");
+                    if (relaxDescs != null) {
+                        for (String d : relaxDescs) w.append("· ").append(d).append("<br>");
+                    }
+                    w.append("<br><b>⚠ 风险提示：</b>降级条件的引物可能 Tm 偏离最优、引物长度变化，")
+                     .append("且已取消/放宽了二聚体、发夹等安全约束——非特异扩增与二聚体风险升高。")
+                     .append("合成前请核对结果列表中的 Tm/GC/序列信息，正式实验前建议做梯度 PCR")
+                     .append("或 BLAST 特异性验证。<br>")
+                     .append("<font color='gray'>（如不希望自动降级：取消本对话框「0 对时自动降级重试」勾选后重新设计）</font></html>");
+                    JOptionPane.showMessageDialog(IGV.getMainFrame(), w.toString(),
+                            "⚠ 已自动降级条件（第 " + relaxUsed + " 级）", JOptionPane.WARNING_MESSAGE);
+                }
                 Primer3ResultDialog.show(chr, group, pairs, tmplStart);
             } catch (Exception ex) {
                 statusL.setText("<html><font color='red'>" + escape(ex.getMessage()) + "</font></html>");

@@ -1272,6 +1272,10 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(item("primer3 设计R向单引物(-)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT); }
         }));
+        // v0.1.69：无选区/懒得选区时的兜底——无视选区，按当前视口中心取 100bp 设计
+        menu.add(item("⚡ 快速设计：视口中心取引物（无视选区，0 对自动降级重试）", new Runnable() {
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, true); }
+        }));
         // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为
         final String srcTip = (sourceFile == null) ? "（未关联文件 → 将弹另存为）" : ("（" + sourceFile.getName() + "）");
         menu.add(item("保存本轨" + (isDirty() ? " ●有改动" : "") + " " + srcTip, new Runnable() {
