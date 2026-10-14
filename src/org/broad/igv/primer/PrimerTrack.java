@@ -981,6 +981,35 @@ public class PrimerTrack extends AbstractTrack {
         return Double.isNaN(v) ? "-" : String.format("%.1f", v);
     }
 
+    /** v0.1.68：快捷键说明弹窗（右键菜单「⌨ 快捷键说明...」）。 */
+    private static void showShortcutHelp() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("<html><body style='width:460px;font-family:sans-serif'>");
+        sb.append("<b>引物轨快捷键</b>（选中引物后生效，无需进入编辑模式）<br><br>");
+        sb.append("<table cellpadding='4' cellspacing='0'>");
+        String[][] rows = {
+                {"Del / Backspace", "删除选中引物（弹确认框；配对连线一并解除）"},
+                {"N", "新建引物：虚影跟随鼠标，在视图中<b>点击放置</b>（引物中心对齐点击点）；可连续放置多条，Esc 退出"},
+                {"E", "编辑选中引物（长度/Tm/序列/测序读长/配对…）"},
+                {"F", "翻转选中引物方向（F ↔ R，位置不变）"},
+                {"V", "视图定位到选中引物（自动缩放对齐）"},
+                {"Ctrl+点击", "两步配对：先单击选中一条引物，再 <b>Ctrl+点击</b>另一条<b>对向</b>引物 → 建立配对；再 Ctrl+点一次即取消。同向或形不成产物会提示"},
+                {"Esc", "取消当前状态（新建虚影 / 选中 / Shift 选区）"},
+                {"方向键", "编辑模式下精确移动选中引物（Shift=×10bp；↑↓=换行）"},
+                {"Shift+拖动", "纯框选区域（视图不动）→ 右键「primer3 设计*」自动填充产物+上下游区"},
+                {"双击", "直接编辑该引物"},
+        };
+        for (String[] r : rows) {
+            sb.append("<tr><td valign='top'><b>").append(r[0]).append("</b></td><td>")
+              .append(r[1]).append("</td></tr>");
+        }
+        sb.append("</table><br>")
+          .append("<font color='gray'>提示：文本输入框聚焦时快捷键自动让位；Esc 可随时取消临时状态。</font>");
+        sb.append("</body></html>");
+        JOptionPane.showMessageDialog(IGV.getMainFrame(), sb.toString(),
+                "引物快捷键说明", JOptionPane.INFORMATION_MESSAGE);
+    }
+
     /** 右键菜单（IGV 原生 track 菜单扩展点） */
     @Override
     public IGVPopupMenu getPopupMenu(TrackClickEvent e) {
@@ -1025,6 +1054,13 @@ public class PrimerTrack extends AbstractTrack {
             }
         });
         menu.add(editMode);
+
+        // v0.1.68：快捷键说明（老板要"放置一个说明"）
+        menu.add(item("⌨ 快捷键说明...", new Runnable() {
+            public void run() {
+                showShortcutHelp();
+            }
+        }));
 
         if (hit != null) {
             menu.add(item("删除选中引物", new Runnable() {

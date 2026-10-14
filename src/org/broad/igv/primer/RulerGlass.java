@@ -13,6 +13,11 @@ public class RulerGlass extends JComponent {
     public int yTop, yBot;  // 线的纵向范围（= DataPanel 在窗内的上下边界）
     public int[] guideBps;  // 对应基因组坐标（用于顶部标注）
 
+    // v0.1.68：N 键新建引物虚影（跟手半透明箭头）
+    public boolean ghostActive = false;
+    public int ghostX, ghostY, ghostW;   // glass 坐标（ghostY=鼠标所在行）
+    public int ghostBp, ghostLen;        // 虚影中心 bp 与引物长度
+
     public RulerGlass() {
         setOpaque(false);
         setEnabled(false);  // 事件穿透，拖拽仍由下方 DataPanel 处理
@@ -20,8 +25,20 @@ public class RulerGlass extends JComponent {
 
     @Override
     protected void paintComponent(Graphics g) {
-        if (!active || xs == null) return;
         Graphics2D g2 = (Graphics2D) g;
+        // v0.1.68：新建虚影（淡绿圆角矩形 + 提示），先画避免被选区盖住
+        if (ghostActive) {
+            int h = 16;
+            g2.setColor(new Color(60, 200, 90, 110));
+            g2.fillRoundRect(ghostX, ghostY - h / 2, Math.max(4, ghostW), h, 5, 5);
+            g2.setColor(new Color(20, 150, 60, 230));
+            g2.setStroke(new BasicStroke(1.2f));
+            g2.drawRoundRect(ghostX, ghostY - h / 2, Math.max(4, ghostW), h, 5, 5);
+            g2.setFont(g2.getFont().deriveFont(10f));
+            g2.drawString("新引物 " + ghostLen + "bp · 点击放置（Esc 取消）",
+                    ghostX + 2, ghostY - h / 2 - 4);
+        }
+        if (!active || xs == null) return;
         int x1 = Math.min(xs[0], xs[xs.length - 1]);
         int x2 = Math.max(xs[0], xs[xs.length - 1]);
         // v0.1.65：起止之间画淡色半透明区域（"淡淡的选定区间"），上下沿 DataPanel 可见区

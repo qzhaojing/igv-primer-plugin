@@ -280,7 +280,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     //   ② 主窗体 rootPane 上的 WHEN_IN_FOCUSED_WINDOW 键绑定：Swing 正规路径，
     //      配合「选中引物即 requestFocus 到 DataPanel」，从搜索框等场景切回来也能生效
     // 两条路径对同一物理按键会各触发一次 → 用极短窗口去重（远小于系统按键重复间隔，不影响长按连发）
-    private static java.awt.event.AWTEventListener keyListener;
+    private static java.awt.event.AWTEventListener shortcutListener;   // v0.1.68：常驻快捷键（Del/N/E/F/V/Esc + 方向键）
     private static final java.util.List<KeyStroke> boundStrokes = new java.util.ArrayList<KeyStroke>();
     private static final java.util.List<String> boundActionKeys = new java.util.ArrayList<String>();
     private static long lastMoveKeyAt = 0;
@@ -328,22 +328,45 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         return true;
     }
 
-    private static void installKeyboard() {
-        if (keyListener == null) {
-            keyListener = new java.awt.event.AWTEventListener() {
-                public void eventDispatched(java.awt.AWTEvent ev) {
-                    if (!(ev instanceof java.awt.event.KeyEvent)) return;
-                    java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
-                    if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
-                    int c = ke.getKeyCode();
-                    if (c != java.awt.event.KeyEvent.VK_LEFT && c != java.awt.event.KeyEvent.VK_RIGHT
-                            && c != java.awt.event.KeyEvent.VK_UP && c != java.awt.event.KeyEvent.VK_DOWN) return;
+    /**
+     * v0.1.68：常驻快捷键监听（幂等；PrimerPlugin.init 与 keeper 定时器调用）。
+     * 一条 AWTEventListener 兼顾：
+     *  - 功能快捷键 Del/N/E/F/V/Esc（全局，选中引物即用，无需进编辑模式）；
+     *  - 方向键精确移动（沿用 v0.1.51 handleMoveKey，仅编辑模式生效）。
+     * 文本输入聚焦 / 焦点在其它窗口（对话框）时不拦截。
+     */
+    public static synchronized void ensureShortcutKeys() {
+        if (shortcutListener != null) return;
+        shortcutListener = new java.awt.event.AWTEventListener() {
+            public void eventDispatched(java.awt.AWTEvent ev) {
+                if (!(ev instanceof java.awt.event.KeyEvent)) return;
+                java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
+                if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
+                int c = ke.getKeyCode();
+                switch (c) {
+                    case java.awt.event.KeyEvent.VK_DELETE:
+                    case java.awt.event.KeyEvent.VK_BACK_SPACE:
+                    case java.awt.event.KeyEvent.VK_N:
+                    case java.awt.event.KeyEvent.VK_E:
+                    case java.awt.event.KeyEvent.VK_F:
+                    case java.awt.event.KeyEvent.VK_V:
+                    case java.awt.event.KeyEvent.VK_ESCAPE:
+                        if (handleShortcutKey(c)) ke.consume();
+                        return;
+                    default:
+                }
+                if (c == java.awt.event.KeyEvent.VK_LEFT || c == java.awt.event.KeyEvent.VK_RIGHT
+                        || c == java.awt.event.KeyEvent.VK_UP || c == java.awt.event.KeyEvent.VK_DOWN) {
                     if (handleMoveKey(c, ke.isShiftDown())) ke.consume();  // 阻止 IGV 原生方向键平移
                 }
-            };
-            java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
-                    keyListener, java.awt.AWTEvent.KEY_EVENT_MASK);
-        }
+            }
+        };
+        java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(
+                shortcutListener, java.awt.AWTEvent.KEY_EVENT_MASK);
+    }
+
+    private static void installKeyboard() {
+        ensureShortcutKeys();   // v0.1.68：快捷键监听常驻（进入编辑模式只是补挂 rootPane 绑定）
         installKeyBindings();
     }
 
@@ -377,11 +400,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (!boundActionKeys.contains(key)) boundActionKeys.add(key);
     }
 
+    /** v0.1.68：退出编辑模式只摘 rootPane 方向键绑定；快捷键监听（shortcutListener）常驻不摘。 */
     private static void removeKeyboard() {
-        if (keyListener != null) {
-            java.awt.Toolkit.getDefaultToolkit().removeAWTEventListener(keyListener);
-            keyListener = null;
-        }
         try {
             java.awt.Window w = IGV.getMainFrame();
             if (w instanceof JFrame) {
@@ -726,26 +746,64 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
     }
 
-    /** 给一个 DataPanel 挂 Shift 选区监听（幂等）。 */
+    /** 给一个 DataPanel 挂 Shift 选区监听（幂等）。v0.1.65 起兼管：N 布防放置 / Ctrl+配对 / 点击选中 / 虚影跟手。 */
     public static synchronized void installShiftSelector(final DataPanel dp) {
         if (dp == null || shiftAdapters.contains(dp)) return;
         lastPanel = dp;   // v0.1.67：tooltip 行感知命中要用（拿鼠标坐标转 panel 坐标）
         javax.swing.event.MouseInputAdapter ma = new javax.swing.event.MouseInputAdapter() {
+            private int pressX, pressY;
+            private boolean pressed;
+
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {
-                // 编辑模式下 PrimerEditTool 自身已有 Shift 分支（DataPanelMouseAdapter 会转给它），
+                // 编辑模式下 PrimerEditTool 自身已有全套分支（DataPanelMouseAdapter 会转给它），
                 // 这里不接管，避免两条路径叠加；普通模式才接管。
                 if (inEditMode()) return;
-                if (!SwingUtilities.isLeftMouseButton(e) || !e.isShiftDown()) return;
-                if (shiftTool.busy) return;
-                AbstractDataPanelTool saved = currentToolOf(dp);
-                savedShiftTools.put(dp, saved);
-                try { dp.setCurrentTool(shiftTool); } catch (Throwable ignore) { return; }
-                shiftTool.busy = true;
-                shiftTool.mousePressed(e);
+                if (!SwingUtilities.isLeftMouseButton(e)) return;
+                // v0.1.68：N 布防态——点击放置新引物（引物中心对齐点击点）
+                if (newArm) { placeNewPrimer(e); return; }
+                // v0.1.68：Ctrl+点击 = 配对（无锚点则设为锚点；有锚点则与命中者连/断边）
+                if (e.isControlDown()) { ctrlPairClick(e); return; }
+                // v0.1.65：Shift+左键按下即换 ShiftTool（PanTool.mousePressed 零视觉副作用）
+                if (e.isShiftDown()) {
+                    if (shiftTool.busy) return;
+                    AbstractDataPanelTool saved = currentToolOf(dp);
+                    savedShiftTools.put(dp, saved);
+                    try { dp.setCurrentTool(shiftTool); } catch (Throwable ignore) { return; }
+                    shiftTool.busy = true;
+                    shiftTool.mousePressed(e);
+                    return;
+                }
+                pressX = e.getX(); pressY = e.getY(); pressed = true;   // 单击选中判定（released 用）
+            }
+
+            @Override
+            public void mouseMoved(java.awt.event.MouseEvent e) {
+                if (newArm) updateGhost(e);   // v0.1.68：虚影跟手
+            }
+
+            @Override
+            public void mouseDragged(java.awt.event.MouseEvent e) {
+                if (newArm) updateGhost(e);   // 布防态按住拖动也更新虚影
+            }
+
+            @Override
+            public void mouseReleased(java.awt.event.MouseEvent e) {
+                if (inEditMode() || !pressed) return;
+                pressed = false;
+                if (newArm) return;   // 布防点击在 pressed 已处理
+                if (!SwingUtilities.isLeftMouseButton(e) || e.isShiftDown() || e.isControlDown()) return;
+                // 位移小 = 单击：选中/取消选中引物（拖动仍归 PanTool 平移，两不误）
+                if (Math.abs(e.getX() - pressX) > 4 || Math.abs(e.getY() - pressY) > 4) return;
+                ReferenceFrame frame = frameOf(e);
+                if (frame == null) return;
+                Primer hit = PrimerTrack.hitTestAny(e.getX(), e.getY(), frame.getChrName());
+                PrimerStore.selected = hit;   // 命中=选中（兼配对锚点）；空白=取消选中
+                ((DataPanel) e.getSource()).repaint();
             }
         };
         dp.addMouseListener(ma);
+        dp.addMouseMotionListener(ma);   // v0.1.68：虚影跟手要 mouseMoved
         shiftAdapters.add(dp);
     }
 
@@ -754,6 +812,193 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         try {
             for (DataPanel dp : findDataPanels()) installShiftSelector(dp);
         } catch (Throwable ignore) {
+        }
+    }
+
+    // ---------- v0.1.68：快捷键套件（Del 删 / N 新建虚影放置 / Ctrl+配对 / E 编辑 / F 翻转 / V 定位 / Esc 取消） ----------
+
+    private static boolean newArm = false;   // N 布防：虚影新建态
+
+    /** N 键：进入新建布防（虚影跟手，点击放置；可连续放置，Esc 退出）。 */
+    public static synchronized void armNewPrimer() {
+        if (inEditMode()) exitEditMode();   // 布防依赖普通模式的全局输入监听（编辑模式会被 PrimerEditTool 接管）
+        java.util.List<DataPanel> panels;
+        try {
+            panels = findDataPanels();
+        } catch (Throwable t) {
+            panels = java.util.Collections.emptyList();   // IGV 未就绪（headless 测试）
+        }
+        if (panels.isEmpty()) {
+            try {
+                JOptionPane.showMessageDialog(IGV.getMainFrame(), "未找到数据面板（请先加载数据）");
+            } catch (Throwable ignore) {
+            }
+            return;
+        }
+        ensureShiftSelectors();   // 保证全局输入监听已挂
+        newArm = true;
+        if (rulerGlass == null) setupGlass();
+        if (rulerGlass != null) rulerGlass.setVisible(true);
+    }
+
+    public static boolean newPrimerArmed() { return newArm; }
+
+    /** 布防态点击：以点击点为中心放一条默认长度引物（"一一对应"），弹编辑框微调。 */
+    private static void placeNewPrimer(java.awt.event.MouseEvent e) {
+        ReferenceFrame frame = frameOf(e);
+        if (frame == null) return;
+        String chr = frame.getChrName();
+        if (PrimerTrack.isInToolbarAny(e.getX(), e.getY(), chr)) return;   // 工具条上不放置
+        int bp = bpAt(e, frame);
+        int len = PrimerStore.defaultLen;
+        int start = Math.max(0, bp - len / 2);   // 引物中心对齐点击点
+        AddPrimerDialog.show(start, null, null);  // 手动轨(group=null)，名称自动 nextName
+        // 布防保持（连续放置多条），Esc 退出
+    }
+
+    /** 虚影跟手：更新 glass 上的半透明新引物位置。 */
+    private static void updateGhost(java.awt.event.MouseEvent e) {
+        try {
+            ReferenceFrame frame = frameOf(e);
+            if (frame == null) { clearGhost(); return; }
+            int bp = bpAt(e, frame);
+            int len = PrimerStore.defaultLen;
+            int x1 = xOf(bp - len / 2, frame), x2 = xOf(bp + len / 2 + 1, frame);
+            if (rulerGlass == null) setupGlass();
+            if (rulerGlass == null) return;
+            java.awt.Point p = SwingUtilities.convertPoint((DataPanel) e.getSource(), x1, e.getY(), rulerGlass);
+            rulerGlass.ghostActive = true;
+            rulerGlass.ghostX = p.x;
+            rulerGlass.ghostY = p.y;
+            rulerGlass.ghostW = Math.max(4, x2 - x1);
+            rulerGlass.ghostLen = len;
+            rulerGlass.setVisible(true);
+            rulerGlass.repaint();
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private static void clearGhost() {
+        if (rulerGlass != null && rulerGlass.ghostActive) {
+            rulerGlass.ghostActive = false;
+            rulerGlass.repaint();
+        }
+    }
+
+    /**
+     * v0.1.68：Ctrl+点击两步配对（普通模式，编辑模式走 PrimerEditTool.mousePressed 同款逻辑）。
+     * 老板原话："点击一个引物按住ctrl点击另一个对向引物可以创建pair"。
+     *  - 普通单击引物 = 选中（兼锚点，见 installShiftSelector 的 released）；
+     *  - Ctrl+点击第二条 = 与锚点连/断边（toggleEdge 内含同链拒绝 + PCR 产物校验）；
+     *  - Ctrl+点空白 = 取消锚点（不消费事件，视图平移不受影响）。
+     */
+    private static void ctrlPairClick(java.awt.event.MouseEvent e) {
+        ReferenceFrame frame = frameOf(e);
+        if (frame == null) return;
+        String chr = frame.getChrName();
+        Primer hit = PrimerTrack.hitTestAny(e.getX(), e.getY(), chr);
+        final DataPanel dp = (DataPanel) e.getSource();
+        if (hit == null) {
+            if (PrimerStore.selected != null) {   // 取消锚点
+                PrimerStore.selected = null;
+                dp.repaint();
+            }
+            return;   // 不消费：Ctrl+空白仍归 IGV 原生
+        }
+        Primer sel = PrimerStore.selected;
+        if (sel == null || sel == hit) {
+            PrimerStore.selected = hit;            // 首个锚点
+        } else {
+            PrimerStore.toggleEdge(sel, hit);      // 连/断这一条边（同向会弹窗拒绝）
+            PrimerStore.selected = sel;            // 锚点保持，便于连续配对
+        }
+        e.consume();
+        dp.repaint();
+    }
+
+    /** Del：删除选中引物（确认框；配对连线由 remove→cleanOrphanPairs 一并处理）。 */
+    private static void deleteSelected() {
+        Primer sel = PrimerStore.selected;
+        if (sel == null) return;
+        int r = JOptionPane.showConfirmDialog(IGV.getMainFrame(),
+                "删除引物 " + sel.name + "（" + sel.chr + ":" + (sel.start + 1) + "-" + sel.end + "）？"
+                        + ((sel.pairedWith != null && !sel.pairedWith.isEmpty())
+                        ? "\n该引物的配对连线将一并解除。" : ""),
+                "删除引物（Del）", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+        PrimerStore.remove(sel);
+        PrimerStore.selected = null;
+    }
+
+    /** E：编辑选中引物。 */
+    private static void editSelected() {
+        Primer sel = PrimerStore.selected;
+        if (sel == null) return;
+        AddPrimerDialog.show(sel.start, sel, sel.group);
+    }
+
+    /** F：翻转选中引物方向（F↔R，位置不动；二聚体标记清空按需重算）。public 供测试。 */
+    public static void flipSelected() {
+        Primer sel = PrimerStore.selected;
+        if (sel == null) return;
+        sel.strand = sel.strand == '+' ? '-' : '+';
+        sel.role = sel.strand == '+' ? "R1" : "R2";
+        PrimerStore.refreshSequence(sel);
+        PrimerStore.resetDimerFlags();
+        PrimerStore.refresh();
+    }
+
+    /** V：视图定位到选中引物（前后各留 max(100, 5×引物长) bp）。 */
+    private static void zoomToSelected() {
+        Primer sel = PrimerStore.selected;
+        if (sel == null) return;
+        try {
+            DataPanel dp = lastPanel;
+            if (dp == null) {
+                java.util.List<DataPanel> ps = findDataPanels();
+                if (ps.isEmpty()) return;
+                dp = ps.get(0);
+            }
+            ReferenceFrame frame = dp.getFrame();
+            if (frame == null) return;
+            int pad = Math.max(100, (sel.end - sel.start) * 5);
+            frame.jumpTo(sel.chr, Math.max(0, sel.start - pad), sel.end + pad);
+        } catch (Throwable ignore) {
+        }
+    }
+
+    /** Esc：取消一切临时状态（新建虚影 / 选中锚点 / Shift 选区）。 */
+    public static synchronized void cancelTempStates() {
+        boolean wasArmed = newArm;
+        newArm = false;
+        clearGhost();
+        clearSelection();   // 含 shiftOn / ruler 参考线
+        if (wasArmed || PrimerStore.selected != null) {
+            PrimerStore.selected = null;
+            PrimerStore.refresh();
+        }
+    }
+
+    /** v0.1.68 快捷键分发（文本输入/其它窗口聚焦时不拦截）。public 供测试。 */
+    public static boolean handleShortcutKey(int keyCode) {
+        if (focusInOtherWindow()) return false;   // 焦点在对话框等别处窗口
+        if (isTextInputFocused()) return false;   // 输入框打字中
+        switch (keyCode) {
+            case java.awt.event.KeyEvent.VK_DELETE:
+            case java.awt.event.KeyEvent.VK_BACK_SPACE:
+                deleteSelected(); return true;
+            case java.awt.event.KeyEvent.VK_N:
+                armNewPrimer(); return true;
+            case java.awt.event.KeyEvent.VK_E:
+                editSelected(); return true;
+            case java.awt.event.KeyEvent.VK_F:
+                flipSelected(); return true;
+            case java.awt.event.KeyEvent.VK_V:
+                zoomToSelected(); return true;
+            case java.awt.event.KeyEvent.VK_ESCAPE:
+                cancelTempStates(); return true;
+            default:
+                return false;
         }
     }
 
