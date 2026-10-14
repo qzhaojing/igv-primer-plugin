@@ -326,9 +326,19 @@ public class Primer3Core {
          * 防止同分组重复设计时引物名撞车导致 linkByName 配错线。
          */
         public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used) {
+            return toPrimers(chr, group, tmplOffset, used, 0);
+        }
+
+        /**
+         * v0.1.66：pairNo > 0 时用指定对编号命名（二次设计续号：PrimerStore.nextPairNumber
+         * 返回的分组内下一个可用编号），否则回退 idx+1（结果集内序号，兼容旧调用/测试）。
+         * 命名形如 group_P{pairNo}_F / group_P{pairNo}_R，pairedWith 互链同步用新名。
+         */
+        public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used, int pairNo) {
             List<Primer> out = new ArrayList<Primer>();
+            int no = pairNo > 0 ? pairNo : idx + 1;
             if (leftSeq != null) {
-                String fn = unique(group + "_P" + (idx + 1) + "_F", used);
+                String fn = unique(group + "_P" + no + "_F", used);
                 Primer f = new Primer(fn, chr, tmplOffset + leftStart, tmplOffset + leftStart + leftLen,
                         '+', "R1", leftLen, null);
                 f.group = group;
@@ -342,7 +352,7 @@ public class Primer3Core {
                 out.add(f);
                 if (rightSeq != null) {
                     // 成对：补 R 并互链
-                    String rn = unique(group + "_P" + (idx + 1) + "_R", used);
+                    String rn = unique(group + "_P" + no + "_R", used);
                     Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
                             '-', "R2", rightLen, null);
                     r.group = group;
@@ -359,7 +369,7 @@ public class Primer3Core {
                 }
             } else if (rightSeq != null) {
                 // 仅 R 向单引物
-                String rn = unique(group + "_P" + (idx + 1) + "_R", used);
+                String rn = unique(group + "_P" + no + "_R", used);
                 Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
                         '-', "R2", rightLen, null);
                 r.group = group;

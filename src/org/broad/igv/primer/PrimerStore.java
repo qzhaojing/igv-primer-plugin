@@ -378,6 +378,35 @@ public class PrimerStore {
         return String.format("P%03d", max + 1);
     }
 
+    /**
+     * v0.1.66：primer3 分组续号——返回该分组下一个可用的引物对编号（从 1 起）。
+     *
+     * 根因（老板截图实锤）：二次设计时 Pair.toPrimers 用结果集内序号 idx+1 命名
+     * （group_P1_F/P1_R），第二次又从 P1 开始，撞名后 unique()/dedupNames 只能加
+     * _2 后缀（P1_F_2、P1_R_2）——丑且断号。
+     *
+     * 规则：扫全部引物名，匹配 ^group_P(\d+)(_[FR])?(_\d+)?$（分组名前缀锚定，
+     * 兼容 dedupNames 的 _2 后缀名与单引物只有一侧的情况），取最大编号 + 1；
+     * 无匹配返回 1。BED 导入的同前缀名同样计入（续号全局一致）。
+     */
+    public static synchronized int nextPairNumber(String group) {
+        if (group == null) return 1;
+        java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
+                "^" + java.util.regex.Pattern.quote(group) + "_P(\\d+)(?:_[FR])?(?:_\\d+)?$");
+        int max = 0;
+        for (Primer p : primers) {
+            if (p.name == null) continue;
+            java.util.regex.Matcher m = pat.matcher(p.name);
+            if (m.find()) {
+                try {
+                    max = Math.max(max, Integer.parseInt(m.group(1)));
+                } catch (Exception ignore) {
+                }
+            }
+        }
+        return max + 1;
+    }
+
     /** 是否存在同名引物；exclude 非空时排除它（编辑自身名称不算重复） */
     public static synchronized boolean hasName(String name) {
         return hasName(name, null);

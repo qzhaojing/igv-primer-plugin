@@ -142,12 +142,19 @@ public class Primer3ResultDialog {
                 JOptionPane.showMessageDialog(this, "未勾选任何结果", "primer3 设计结果", JOptionPane.WARNING_MESSAGE);
                 return;
             }
-            // 组装 Primer（成对=F/R 互链；单引物=1 条固定方向），并与同分组已有引物去重名（重复设计防撞车）
+            // 组装 Primer（成对=F/R 互链；单引物=1 条固定方向）。
+            // v0.1.66：编号延续——从分组内已有最大对编号 +1 开始（二次设计不再从 P1 重名被加 _2），
+            // 勾选顺序即编号顺序；used 集合仍保留兜底去重（极端撞名时加 _2）。
+            int firstFree = PrimerStore.nextPairNumber(group);
             Set<String> used = new HashSet<String>();
             for (Primer p : PrimerStore.getPrimersByGroup(group)) used.add(p.name);
             List<Primer> add = new ArrayList<Primer>();
-            for (Primer3Core.Pair p : chosen) {
-                add.addAll(p.toPrimers(chr, group, tmplOffset, used));
+            StringBuilder nums = new StringBuilder();
+            for (int i = 0; i < chosen.size(); i++) {
+                int pairNo = firstFree + i;
+                add.addAll(chosen.get(i).toPrimers(chr, group, tmplOffset, used, pairNo));
+                if (nums.length() > 0) nums.append('、');
+                nums.append('P').append(pairNo);
             }
             // v0.1.65：同序列去重——primer3 对多个产物常挑同一条最优 F/R，直接加入会产生
             // 多条 chr/start/end/strand/seq 完全相同的冗余引物（BED 多条重复、tooltip 同位串显）
@@ -158,7 +165,7 @@ public class Primer3ResultDialog {
             boolean single = chosen.size() == 1 && chosen.get(0).isSingle();
             JOptionPane.showMessageDialog(this,
                     "已加入 " + chosen.size() + (single ? " 条引物" : " 对引物")
-                            + "（共 " + add.size() + " 条）到分组「" + group + "」。"
+                            + "（编号 " + nums + "，共 " + add.size() + " 条）到分组「" + group + "」。"
                             + (merged > 0
                             ? "\n已合并 " + merged + " 条重复引物（不同产物选中了同一条引物，配对改连保留引物）。" : "")
                             + "\n轨名带 * 表示未落盘：工具条「另存为」可保存为标准引物 BED。",
