@@ -34,14 +34,14 @@ public class TestP5 {
         // 视野 0-based [10000,13000)，选区 [11000,11500]（0-based 含），最短引物 18
         int[] f = Primer3Dialog.fillFromSelection(11000, 11500, 10000, 13000, 18);
         check(f != null && f[0] == 11001 && f[1] == 11501, "产物=选区(1-based) " + Arrays.toString(f));
-        // 上游 0-based [10500,10900] 含两端 = 401bp；下游 [11600,12000] = 401bp
-        check(f[2] == 10501 && f[3] == 401, "上游=左缘外100-500bp (起10501 长401)");
-        check(f[4] == 11601 && f[5] == 401, "下游=右缘外100-500bp (起11601 长401)");
+        // v0.1.65：侧翼默认改为 100~200bp。上游 0-based [10800,10900] = 101bp；下游 [11600,11700] = 101bp
+        check(f[2] == 10801 && f[3] == 101, "上游=左缘外100-200bp (起10801 长101)");
+        check(f[4] == 11601 && f[5] == 101, "下游=右缘外100-200bp (起11601 长101)");
 
-        // 不钳屏幕（无视野上下文）：上下游完整 401bp
+        // 不钳屏幕（无视野上下文）：上下游完整 101bp
         int[] fNoVp = Primer3Dialog.fillFromSelection(11000, 11500, 0, Integer.MAX_VALUE, 18);
-        check(fNoVp[2] == 10501 && fNoVp[3] == 401 && fNoVp[4] == 11601 && fNoVp[5] == 401,
-                "无视野钳制时上下游=100-500bp " + Arrays.toString(fNoVp));
+        check(fNoVp[2] == 10801 && fNoVp[3] == 101 && fNoVp[4] == 11601 && fNoVp[5] == 101,
+                "无视野钳制时上下游=100-200bp " + Arrays.toString(fNoVp));
 
         // 起止倒转自动交换
         int[] fRev = Primer3Dialog.fillFromSelection(11500, 11000, 10000, 13000, 18);

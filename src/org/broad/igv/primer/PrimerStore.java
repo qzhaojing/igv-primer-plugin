@@ -478,9 +478,13 @@ public class PrimerStore {
             Primer f = en.getValue();
             Primer r = rs.get(en.getKey());
             if (r == null) continue;                      // 单侧：单引物设计，保持原样
-            boolean ok = f.pairedWith != null && f.pairedWith.size() == 1 && f.pairedWith.contains(r.name)
-                    && r.pairedWith != null && r.pairedWith.size() == 1 && r.pairedWith.contains(f.name);
-            if (ok) continue;                             // 已是正确单边
+            // v0.1.65：语义修正——仅当同编号伴侣存在但**未互连**时才清边重建。
+            // 旧逻辑「非唯一单边就重建」会把 v0.1.65 去重后的合法 1-F-多-R 结构
+            // （P1_F 连 P1_R..P5_R，多条 R 共享一条同序列 F）错修成单边。
+            // 已互连即合法（1 对多是正常结构），不动。
+            boolean linked = f.pairedWith != null && f.pairedWith.contains(r.name)
+                    && r.pairedWith != null && r.pairedWith.contains(f.name);
+            if (linked) continue;
             dropAllEdges(f);
             dropAllEdges(r);
             if (f.pairedWith == null) f.pairedWith = new java.util.LinkedHashSet<String>();
@@ -550,6 +554,59 @@ public class PrimerStore {
             }
         }
         return renamed;
+    }
+
+    /**
+     * v0.1.65：primer3 结果加入前同序列去重。
+     * primer3 对多个候选产物常挑同一条最优 F（或 R）——直接加入会产生多条
+     * chr/start/end/strand/seq 完全相同的冗余引物（BED 多条重复、悬浮提示同位串显）。
+     * 规则：与同分组已有引物 + 本批次内先加入者按五元组全同判重，保留首条；
+     * 被合并引物的配对边在全体引物（批次保留者 + store 已有）中重连到保留者
+     * （对称边由随后 addAll 的 linkByName 补齐）。返回合并掉的数量。
+     */
+    public static synchronized int mergeDuplicatePrimers(List<Primer> add, String group) {
+        java.util.Map<String, Primer> seen = new java.util.HashMap<String, Primer>();
+        for (Primer p : primers) {
+            if (group == null ? p.group != null : !group.equals(p.group)) continue;
+            seen.put(primerFingerprint(p), p);
+        }
+        java.util.List<Primer> keep = new java.util.ArrayList<Primer>();
+        java.util.Map<String, String> rename = new java.util.LinkedHashMap<String, String>();
+        int merged = 0;
+        for (Primer p : add) {
+            Primer first = seen.get(primerFingerprint(p));
+            if (first == p) { keep.add(p); continue; }   // 已在 store 中的同对象：保留（幂等）
+            if (first != null) {
+                if (p.name != null && !p.name.equals(first.name)) rename.put(p.name, first.name);
+                merged++;
+            } else {
+                seen.put(primerFingerprint(p), p);
+                keep.add(p);
+            }
+        }
+        if (merged == 0) return 0;
+        for (Primer p : keep) remapEdges(p, rename);
+        for (Primer p : primers) remapEdges(p, rename);   // store 中指向旧名的边也改连
+        add.clear();
+        add.addAll(keep);
+        return merged;
+    }
+
+    /** 引物身份指纹：位置+方向+序列全同视为同一条引物。 */
+    private static String primerFingerprint(Primer p) {
+        return p.chr + "|" + p.start + "|" + p.end + "|" + p.strand + "|" + (p.seq == null ? "" : p.seq);
+    }
+
+    /** 把 p.pairedWith 中的旧名按 rename 映射替换为新名（保持集合去重与顺序）。 */
+    private static void remapEdges(Primer p, java.util.Map<String, String> rename) {
+        if (p.pairedWith == null || p.pairedWith.isEmpty() || rename.isEmpty()) return;
+        boolean hit = false;
+        for (String nm : p.pairedWith) if (rename.containsKey(nm)) { hit = true; break; }
+        if (!hit) return;
+        java.util.Set<String> out = new java.util.LinkedHashSet<String>();
+        for (String nm : p.pairedWith) out.add(rename.containsKey(nm) ? rename.get(nm) : nm);
+        p.pairedWith.clear();
+        p.pairedWith.addAll(out);
     }
 
     /** 按名称列表配对（编辑框保存 / 新建时调用）：p 与每个异链且能形成 PCR 产物的同名引物各加一条独立边（1:N 自然支持）。 */

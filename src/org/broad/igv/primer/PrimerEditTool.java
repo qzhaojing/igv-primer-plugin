@@ -24,7 +24,11 @@ import java.util.Map;
  *    自动填充产物区间+上下游区，v0.1.61）；单击（位移<5bp）清除选区
  *  - v0.1.63：Shift+空白拖拽 = 纯选区（视图不动，只画红线；松手落定）——解决
  *    "按住 shift 选区域视图跟着滚走"；currentTool 独占事件分发，不进 panning 即不平移
- *  - 拖拽中两条红竖线参考线（起止坐标）
+ *  - v0.1.65：Shift+拖动**无需进入编辑模式**——普通模式下 Shift+左键按下即把
+ *    DataPanel.currentTool 换成 ShiftTool（实测 PanTool.mousePressed 零视觉副作用），
+ *    后续 dragged/released 全走 ShiftTool 只画选区不动视图，松手还原原 tool；
+ *    选区显示为淡色半透明区域（RulerGlass 全窗 + overlay 轨内兜底）
+ *  - 拖拽参考线/选区可视化（起止坐标）
  *  - 单击 = 选中（出现橙色端点手柄）
  *  - 坐标换算统一走 frame.getChromosomePosition()（IGV 权威，避免 scale 单位踩坑）
  */
@@ -44,6 +48,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     private int mode = MODE_NONE;
     private boolean panning = false;
     private boolean selecting = false;   // v0.1.63：Shift+拖拽纯选区（不平移）
+    private static boolean shiftOn = false;   // v0.1.65：Shift 选区可视化生效中（非编辑模式也画）
     private Primer dragging;
     private int dragAnchorBp;
     private int origStart, origEnd;
@@ -74,6 +79,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             dp.setCurrentTool(instance);
             instance.installHover(dp);
         }
+        ensureShiftSelectors();   // v0.1.65：新建面板也补挂 Shift 选区
         PrimerStore.refresh();
         installKeyboard();
     }
@@ -89,6 +95,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             rulerGlass.xs = null;
             rulerGlass.repaint();
         }
+        shiftOn = false;      // v0.1.65：连 Shift 选区的可视化标记一起清
+        clearGuides();
         PrimerStore.refresh();
         removeKeyboard();
         clearSelection();   // v0.1.61：选区随编辑模式一起消失，避免右键菜单显示已看不见的选区
@@ -198,21 +206,22 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     private static void clearSelection() {
         selChr = null;
+        shiftOn = false;   // v0.1.65：选区撤销时，Shift 参考线/淡色区域一并撤下
     }
 
     public static int[] guidePositions(String chr) {
-        if (!inEditMode() || guides == null) return null;
+        if ((!inEditMode() && !shiftOn) || guides == null) return null;
         return chr != null && chr.equals(guideChr) ? guides : null;
     }
 
-    private void setGuides(ReferenceFrame frame, int a, int b) {
+    private static void setGuides(ReferenceFrame frame, int a, int b) {
         guideChr = frame.getChrName();
         guides = new int[]{a, b};
         updateRuler(activePanel, frame, a, b);
     }
 
     /** 在 glass pane 上画贯穿 DataPanel 全高的 ruler 线（对齐参考轨/其他 track） */
-    private void updateRuler(DataPanel dp, ReferenceFrame frame, int a, int b) {
+    private static void updateRuler(DataPanel dp, ReferenceFrame frame, int a, int b) {
         if (dp == null || frame == null) return;
         if (rulerGlass == null) setupGlass();
         if (rulerGlass == null) return;
@@ -238,7 +247,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 java.awt.Point pB = SwingUtilities.convertPoint(dp, 0, dp.getHeight(), rulerGlass);
                 top = pT.y; bot = pB.y;
             }
-            rulerGlass.active = inEditMode();
+            rulerGlass.active = inEditMode() || shiftOn;
             rulerGlass.xs = new int[]{p1.x, p2.x};
             rulerGlass.yTop = top;
             rulerGlass.yBot = bot;
@@ -251,10 +260,10 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     /** v0.1.48：全窗 ruler 是否正在生效（生效时 PrimerTrack 不再重复画局部红线，避免两条重叠） */
     public static boolean rulerActive() {
-        return inEditMode() && rulerGlass != null && rulerGlass.active && rulerGlass.xs != null;
+        return (inEditMode() || shiftOn) && rulerGlass != null && rulerGlass.active && rulerGlass.xs != null;
     }
 
-    private void clearGuides() {
+    private static void clearGuides() {
         guides = null;
         if (rulerGlass != null) {
             rulerGlass.active = false;
@@ -663,5 +672,123 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                     System.currentTimeMillis(), 0, local.x, local.y, 0, false));
         } catch (Throwable ignore) {
         }
+    }
+
+    // ---------- v0.1.65：全局 Shift+拖动选区（无需进入编辑模式） ----------
+    // 根因（老板两次反馈"Shift 拖动还是只能滚屏"）：选区全链挂在编辑模式上——
+    //   enterEditMode 才 setCurrentTool(PrimerEditTool)，guidePositions/updateRuler/rulerActive
+    //   又全带 inEditMode() 门禁。普通模式下 currentTool 是 IGV 原生 PanTool，Shift 拖动必平移。
+    // 本方案不动 listener 顺序（Swing 先注册先收，DataPanel 自带的 adapter 抢不过），
+    // 而是利用实测事实：PanTool.mousePressed 只记录坐标、零视觉副作用。因此 Shift+左键
+    // 按下时把 currentTool 换成 ShiftTool 即可——后续 dragged/released 由 DataPanelMouseAdapter
+    // 转给 currentTool（=ShiftTool），只画选区不动视图；松手后还原原 tool。
+    private static final ShiftTool shiftTool = new ShiftTool();
+    private static final java.util.Map<DataPanel, AbstractDataPanelTool> savedShiftTools =
+            new java.util.IdentityHashMap<DataPanel, AbstractDataPanelTool>();
+    private static final java.util.Set<DataPanel> shiftAdapters =
+            java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<DataPanel, Boolean>());
+
+    /** 反射读取 DataPanel.currentTool（私有字段，无 getter）。setCurrentTool 只收 AbstractDataPanelTool。 */
+    private static AbstractDataPanelTool currentToolOf(DataPanel dp) {
+        try {
+            java.lang.reflect.Field f = DataPanel.class.getDeclaredField("currentTool");
+            f.setAccessible(true);
+            Object t = f.get(dp);
+            return (t instanceof AbstractDataPanelTool) ? (AbstractDataPanelTool) t : null;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 给一个 DataPanel 挂 Shift 选区监听（幂等）。 */
+    public static synchronized void installShiftSelector(final DataPanel dp) {
+        if (dp == null || shiftAdapters.contains(dp)) return;
+        javax.swing.event.MouseInputAdapter ma = new javax.swing.event.MouseInputAdapter() {
+            @Override
+            public void mousePressed(java.awt.event.MouseEvent e) {
+                // 编辑模式下 PrimerEditTool 自身已有 Shift 分支（DataPanelMouseAdapter 会转给它），
+                // 这里不接管，避免两条路径叠加；普通模式才接管。
+                if (inEditMode()) return;
+                if (!SwingUtilities.isLeftMouseButton(e) || !e.isShiftDown()) return;
+                if (shiftTool.busy) return;
+                AbstractDataPanelTool saved = currentToolOf(dp);
+                savedShiftTools.put(dp, saved);
+                try { dp.setCurrentTool(shiftTool); } catch (Throwable ignore) { return; }
+                shiftTool.busy = true;
+                shiftTool.mousePressed(e);
+            }
+        };
+        dp.addMouseListener(ma);
+        shiftAdapters.add(dp);
+    }
+
+    /** 对所有数据面板确保挂上 Shift 选区监听（keeper 定时器/进入编辑模式/右键菜单时调用）。 */
+    public static synchronized void ensureShiftSelectors() {
+        try {
+            for (DataPanel dp : findDataPanels()) installShiftSelector(dp);
+        } catch (Throwable ignore) {
+        }
+    }
+
+    /** Shift+拖动专用 tool：只记录/绘制选区，绝不动视图。 */
+    private static final class ShiftTool extends AbstractDataPanelTool {
+        private boolean busy = false;
+        private String chr;
+        private int bp0;
+
+        ShiftTool() {
+            super(null, Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR));
+        }
+
+        public String getName() { return "Primer Shift Select"; }
+        public java.awt.Cursor getCursor() { return Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR); }
+
+        public void mousePressed(java.awt.event.MouseEvent e) {
+            if (!SwingUtilities.isLeftMouseButton(e)) return;
+            ReferenceFrame frame = frameOf(e);
+            if (frame == null) return;
+            int x = e.getX(), y = e.getY();
+            if (PrimerTrack.isInToolbarAny(x, y, frame.getChrName())) return;   // 工具条点击不选区
+            chr = frame.getChrName();
+            bp0 = bpAt(e, frame);
+            activePanel = (DataPanel) e.getSource();
+            shiftOn = true;
+            clearSelection();
+            clearGuides();
+            setGuides(frame, bp0, bp0);
+            ((DataPanel) e.getSource()).repaint();
+        }
+
+        public void mouseDragged(java.awt.event.MouseEvent e) {
+            ReferenceFrame f = frameOf(e);
+            if (f != null && chr != null && chr.equals(f.getChrName())) {
+                setGuides(f, bp0, bpAt(e, f));
+            }
+            ((DataPanel) e.getSource()).repaint();
+        }
+
+        public void mouseReleased(java.awt.event.MouseEvent e) {
+            busy = false;
+            if (chr != null) {
+                ReferenceFrame f = frameOf(e);
+                if (f != null && chr.equals(f.getChrName())) {
+                    int bp = bpAt(e, f);
+                    if (Math.abs(bp - bp0) >= 5) setSelection(chr, bp0, bp);
+                    else clearSelection();
+                }
+            }
+            final DataPanel dp = (DataPanel) e.getSource();
+            // 还原被替换的 tool。延后到本事件链结束：DataPanelMouseAdapter 随后还会把
+            // 这个 released 分发给 currentTool，彼时必须是 ShiftTool 本身。
+            SwingUtilities.invokeLater(new Runnable() {
+                public void run() {
+                    AbstractDataPanelTool saved = savedShiftTools.remove(dp);
+                    try { dp.setCurrentTool(saved); } catch (Throwable ignore) { }
+                }
+            });
+            dp.repaint();
+        }
+
+        public void mouseClicked(java.awt.event.MouseEvent e) { }
     }
 }

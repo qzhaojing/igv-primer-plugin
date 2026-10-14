@@ -900,16 +900,23 @@ public class PrimerTrack extends AbstractTrack {
             if (PrimerEditTool.rulerActive()) return;
         } catch (Throwable ignore) { }
         Graphics2D g = ctx.getGraphics();
-        g.setColor(new Color(255, 60, 60));
         Graphics2D gg = (Graphics2D) g;
-        gg.setStroke(new BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
-                10f, new float[]{5f, 4f}, 0f));
+        // v0.1.65：轨内兜底绘制与 RulerGlass 同款——淡色区域 + 两侧边线
+        int gx1 = ctx.bpToScreenPixel(Math.min(guides[0], guides[1]));
+        int gx2 = ctx.bpToScreenPixel(Math.max(guides[0], guides[1]));
+        gg.setColor(new Color(255, 205, 60, 38));
+        gg.fillRect(gx1, rect.y, Math.max(1, gx2 - gx1), rect.height);
+        gg.setColor(new Color(255, 150, 30, 220));
+        gg.setStroke(new BasicStroke(1.5f));
+        gg.drawLine(gx1, rect.y, gx1, rect.y + rect.height);
+        gg.drawLine(gx2, rect.y, gx2, rect.y + rect.height);
+        gg.setStroke(new BasicStroke(1f));
+        gg.setColor(new Color(200, 120, 10, 255));
+        gg.setFont(gg.getFont().deriveFont(10f));
         for (int gp : guides) {
             int x = ctx.bpToScreenPixel(gp);
-            g.drawLine(x, rect.y, x, rect.y + rect.height);
-            g.drawString(String.valueOf(gp + 1), x + 2, rect.y + 12);
+            gg.drawString(String.valueOf(gp + 1), x + 3, rect.y + 12);
         }
-        gg.setStroke(new BasicStroke(1f));
     }
 
     /**
@@ -967,6 +974,7 @@ public class PrimerTrack extends AbstractTrack {
     /** 右键菜单（IGV 原生 track 菜单扩展点） */
     @Override
     public IGVPopupMenu getPopupMenu(TrackClickEvent e) {
+        PrimerEditTool.ensureShiftSelectors();   // v0.1.65：右键路径自然补挂 Shift 选区
         BoundedPopupMenu menu = new BoundedPopupMenu();
         final int clickBp = (int) e.getChromosomePosition();
         // v8 行感知命中：优先用鼠标屏幕坐标 + screenRects（上下行可区分），异常时退化为 bp 命中
@@ -1195,9 +1203,10 @@ public class PrimerTrack extends AbstractTrack {
 
         menu.addSeparator();
         // v0.1.61：primer3 设计引物——成对 / 仅F向(+) / 仅R向(-)。
-        // 有鼠标选区（空白/Shift+拖选，松手保留）→ 对话框自动填充产物区间+上下游(左右100~500bp，限屏幕)；
-        // 无选区 → 按当前视图填充。菜单文案动态显示选区状态，保证可发现性。
-        JMenuItem selHint = new JMenuItem("拖选区域（或Shift+拖动）→ 右键自动填充产物区间+上下游区");
+        // v0.1.65：Shift+拖动=纯选区（视图不动，淡色区域显示，**无需进入编辑模式**）；
+        // 有选区 → 对话框自动填充产物区间+上下游(左右100~200bp，限屏幕)；
+        // 无选区 → 产物=当前视图子集(左右留边距)，上下游=两侧100~200bp。菜单动态显示选区状态。
+        JMenuItem selHint = new JMenuItem("Shift+拖动（或普通拖动）选区域 → 右键自动填充产物区间+上下游区");
         selHint.setEnabled(false);
         menu.add(selHint);
         String[] selNow = PrimerEditTool.currentSelection();

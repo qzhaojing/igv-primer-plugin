@@ -139,10 +139,11 @@ public class Primer3Dialog {
 
     /**
      * v0.1.61：鼠标选区 → 设计框填充值（产物区间 + 上/下游引物设计区）。
+     * v0.1.65：侧翼默认改为左右 100~200bp（老板："左右留出100-200bp作为上下游引物区间"）。
      *
      * 语义（老板需求）：
      *  - 产物区间 = 选区，钳到当前视野内（引物设计区域必须在屏幕内，设计结果直接可视）；
-     *  - 上游区 = 选区左缘外 100~500bp，下游区 = 选区右缘外 100~500bp
+     *  - 上游区 = 选区左缘外 100~200bp，下游区 = 选区右缘外 100~200bp
      *    （未指定引物设计区域时的默认值），同样钳到视野；被视野裁到不足 minLen 时
      *    贴视野边缘退化（允许伸进选区边缘，好过抛异常）。
      *
@@ -153,24 +154,61 @@ public class Primer3Dialog {
      *         选区完全在视野外返回 null（调用方回退视口填充）
      */
     public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen) {
+        return fillFromSelection(selS0, selE0, vpS0, vpE0, minLen, 100, 200);
+    }
+
+    /** 同上，侧翼范围可指定（测试/高级参数用）。 */
+    public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen,
+                                          int flankMin, int flankMax) {
         int s0 = Math.min(selS0, selE0), e0 = Math.max(selS0, selE0);
         int ps = Math.max(s0, vpS0);
         int pe = Math.min(e0, vpE0 - 1);
         if (pe < ps) return null;                       // 选区已不在屏幕内（平移/缩放走了）
-        int[] up = flank(s0, -1, vpS0, vpE0, minLen);
-        int[] dn = flank(e0, +1, vpS0, vpE0, minLen);
+        int[] up = flank(ps, -1, vpS0, vpE0, minLen, flankMin, flankMax);
+        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, flankMin, flankMax);
+        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1};
+    }
+
+    /**
+     * v0.1.65：无鼠标选区 → 按当前视口填充（老板："产物区间设定为显示 range 的子集，
+     * 左右留出 100-200bp 作为上下游引物区间，这样引物设计出来可以直接可视"）。
+     *
+     * 语义：
+     *  - 产物区间 = 视野向内收缩 margin（默认 150，范围 100~200）的子集；
+     *  - 上游区 = 产物左缘外 flankMin~flankMax bp，下游区 = 产物右缘外 flankMin~flankMax bp；
+     *  - 全部钳在视野内 → 产物+引物都在屏幕内，设计结果直接可视。
+     *
+     * @param vpS0,vpE0 当前视野（0-based，end 不含）
+     * @param minLen    最短引物长（兜底）
+     * @param margin    视口边距（产物距视野左右缘的距离）
+     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长}（1-based inclusive + 长度）
+     */
+    public static int[] fillFromViewport(int vpS0, int vpE0, int minLen, int margin,
+                                         int flankMin, int flankMax) {
+        int ps = vpS0 + margin;
+        int pe = vpE0 - 1 - margin;
+        if (pe - ps + 1 < minLen) {   // 视野太窄：取中段 minLen 兜底（仍钳在视野内）
+            int mid = (vpS0 + vpE0 - 1) / 2;
+            ps = Math.max(vpS0, mid - minLen / 2);
+            pe = ps + minLen - 1;
+            if (pe > vpE0 - 1) { pe = vpE0 - 1; ps = Math.max(vpS0, pe - minLen + 1); }
+        }
+        int[] up = flank(ps, -1, vpS0, vpE0, minLen, flankMin, flankMax);
+        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, flankMin, flankMax);
         return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1};
     }
 
     /**
      * v0.1.61：选段单侧侧翼引物设计区（0-based inclusive）。
-     * 理想 = 选段边缘外 100~500bp；被视野裁窄（<minLen）时贴视野边重新取 minLen。
-     * dir=-1 上游（选段左缘 edge0=s0），dir=+1 下游（选段右缘 edge0=e0）。
+     * v0.1.65：侧翼范围参数化（默认 100~200bp）。
+     * 理想 = 选段边缘外 flankMin~flankMax bp；被视野裁窄（<minLen）时贴视野边重新取 minLen。
+     * dir=-1 上游（选段左缘 edge0），dir=+1 下游（选段右缘 edge0）。
      */
-    private static int[] flank(int edge0, int dir, int vpS0, int vpE0, int minLen) {
+    private static int[] flank(int edge0, int dir, int vpS0, int vpE0, int minLen,
+                               int flankMin, int flankMax) {
         int a, b;
-        if (dir < 0) { b = edge0 - 100; a = edge0 - 500; }
-        else         { a = edge0 + 100; b = edge0 + 500; }
+        if (dir < 0) { b = edge0 - flankMin; a = edge0 - flankMax; }
+        else         { a = edge0 + flankMin; b = edge0 + flankMax; }
         a = Math.max(a, vpS0);
         b = Math.min(b, vpE0 - 1);
         if (b - a + 1 >= minLen) return new int[]{a, b};
@@ -185,6 +223,16 @@ public class Primer3Dialog {
     public static void putIfPresent(Map<String, String> params, String tag, JTextField f) {
         String v = f.getText().trim();
         if (!v.isEmpty()) params.put(tag, v);
+    }
+
+    /** v0.1.65：读一个整数框，非法/空 → 默认值，并钳到 [lo, hi]。 */
+    private static int readBounded(JTextField f, int def, int lo, int hi) {
+        try {
+            int v = Integer.parseInt(f.getText().trim());
+            return Math.max(lo, Math.min(hi, v));
+        } catch (Exception ignore) {
+            return def;
+        }
     }
 
     /**
@@ -258,6 +306,10 @@ public class Primer3Dialog {
         private final JTextField uLenF = new JTextField(6);
         private final JTextField dStartF = new JTextField(8);
         private final JTextField dLenF = new JTextField(6);
+        // v0.1.65：无选区时「产物=视野子集」的边距 + 上下游侧翼范围（打开对话框时读取一次）
+        private final JTextField vpMarginF = new JTextField("150", 4);
+        private final JTextField flankMinF = new JTextField("100", 4);
+        private final JTextField flankMaxF = new JTextField("200", 4);
         // 参数
         private final JTextField lenMinF = new JTextField("18", 4);
         private final JTextField lenOptF = new JTextField("20", 4);
@@ -329,12 +381,23 @@ public class Primer3Dialog {
             advPanel.add(new JLabel("起 + 长"));
             advPanel.add(dLenF);
             advPanel.add(new JLabel("bp"));
-            advPanel.add(new JLabel(" ← 引物设计区：左引物落上游区、右引物落下游区（默认=选区左右100–500bp）"));
+            advPanel.add(new JLabel(" ← 引物设计区：左引物落上游区、右引物落下游区（默认=产物两侧100–200bp）"));
+
+            // v0.1.65：无选区时按视口填充的边距/侧翼（打开时读取；有鼠标选区时以选区为准）
+            JPanel fillPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
+            fillPanel.add(new JLabel("视口边距:"));
+            fillPanel.add(vpMarginF);
+            fillPanel.add(new JLabel("bp   引物区侧翼:"));
+            fillPanel.add(flankMinF);
+            fillPanel.add(new JLabel("-"));
+            fillPanel.add(flankMaxF);
+            fillPanel.add(new JLabel("bp（无选区时：产物=视野内缩边距，上下游=产物两侧侧翼，均在屏幕内）"));
 
             JPanel regionPanel = new JPanel();
             regionPanel.setLayout(new BoxLayout(regionPanel, BoxLayout.Y_AXIS));
             regionPanel.add(simplePanel);
             regionPanel.add(advPanel);
+            regionPanel.add(fillPanel);
             advPanel.setVisible(false);
             if (single) {
                 // 单引物只有一种区域模式：禁用模式框并换成正确文案（避免显示"产物区间"误导）
@@ -371,7 +434,7 @@ public class Primer3Dialog {
                         advPanel.setVisible(true);
                         statusL.setText("<html><font color='gray'>已按选定区域填充：产物 " + f[0] + "-" + f[1]
                                 + "；上游 " + f[2] + "+" + f[3] + "bp；下游 " + f[4] + "+" + f[5]
-                                + "bp（默认左右 100–500bp 可改；均已限制在屏幕内）</font></html>");
+                                + "bp（默认两侧 100–200bp 可改；均已限制在屏幕内）</font></html>");
                     } else {
                         statusL.setText("<html><font color='gray'>已按选定区域填充引物区域 "
                                 + f[0] + "-" + f[1] + "</font></html>");
@@ -382,22 +445,33 @@ public class Primer3Dialog {
                 }
             }
             if (sel == null && vp != null) {
+                // v0.1.65：无选区 → 产物=视野子集（左右各留 margin，默认150），上下游=产物两侧
+                // flankMin~flankMax（默认100~200）——产物+引物全在屏幕内，设计结果直接可视。
                 int s0 = Integer.parseInt(vp[1]);
                 int e0 = Integer.parseInt(vp[2]);
                 if (s0 > e0) { int t = s0; s0 = e0; e0 = t; }
-                int maxLen = single ? 2000 : 19000;
-                int[] c = clampMid(s0, e0, maxLen);
-                if (selOffscreen) {
-                    statusL.setText("<html><font color='gray'>选区已不在当前屏幕，已按当前视图自动填充</font></html>");
-                } else if (c[1] - c[0] < e0 - s0) {
-                    statusL.setText("<html><font color='gray'>已按当前视图填充 " + s0 + 1 + "-" + e0
-                            + "（" + (e0 - s0) + "bp 过长，取中段 " + maxLen + "bp）</font></html>");
-                } else {
-                    statusL.setText("<html><font color='gray'>已按当前视图自动填充 "
-                            + chrF.getText() + ":" + (s0 + 1) + "-" + e0 + "</font></html>");
+                int lenMin0 = 18;
+                try { lenMin0 = Integer.parseInt(lenMinF.getText().trim()); } catch (Exception ignore) {}
+                int margin = readBounded(vpMarginF, 150, 0, 2000);
+                int fMin = readBounded(flankMinF, 100, 0, 5000);
+                int fMax = readBounded(flankMaxF, 200, fMin, 5000);
+                int[] f = fillFromViewport(s0, e0, lenMin0, margin, fMin, fMax);
+                tStartF.setText(String.valueOf(f[0]));
+                tEndF.setText(String.valueOf(f[1]));
+                uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
+                dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
+                if (!single) {
+                    modeBox.setSelectedIndex(1);   // 成对：显示上下游框（监听器未注册，手动设可见性）
+                    simplePanel.setVisible(true);
+                    advPanel.setVisible(true);
                 }
-                tStartF.setText(String.valueOf(c[0] + 1));
-                tEndF.setText(String.valueOf(c[1]));
+                if (selOffscreen) {
+                    statusL.setText("<html><font color='gray'>选区已不在当前屏幕，已按当前视图填充</font></html>");
+                } else {
+                    statusL.setText("<html><font color='gray'>已按当前视图填充：产物 " + f[0] + "-" + f[1]
+                            + "（视野内缩 " + margin + "bp）；上游 " + f[2] + "+" + f[3] + "bp；下游 "
+                            + f[4] + "+" + f[5] + "bp——产物与引物均在屏幕内，设计结果直接可视</font></html>");
+                }
             }
 
             // ---- 参数网格 ----
@@ -498,7 +572,7 @@ public class Primer3Dialog {
                     // v0.1.61：高级模式同时显示产物区间行（留空=不强制覆盖）；简单模式只显示产物区间
                     simplePanel.setVisible(true);
                     advPanel.setVisible(adv);
-                    if (adv && !single) autoFillFlanks();   // 上下游为空 → 按产物区间左右100~500bp补全
+                    if (adv && !single) autoFillFlanks();   // 上下游为空 → 按产物区间两侧100~200bp补全
                     pack();
                 }
             });
@@ -533,7 +607,7 @@ public class Primer3Dialog {
                 int[] f = fillFromSelection(s1 - 1, e1 - 1, 0, Integer.MAX_VALUE, lenMin0);
                 uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                 dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
-                statusL.setText("<html><font color='gray'>已按产物区间自动补全上下游区（左右 100–500bp，可改）</font></html>");
+                statusL.setText("<html><font color='gray'>已按产物区间自动补全上下游区（两侧 100–200bp，可改）</font></html>");
             } catch (Exception ignore) {
             }
         }

@@ -149,14 +149,19 @@ public class Primer3ResultDialog {
             for (Primer3Core.Pair p : chosen) {
                 add.addAll(p.toPrimers(chr, group, tmplOffset, used));
             }
+            // v0.1.65：同序列去重——primer3 对多个产物常挑同一条最优 F/R，直接加入会产生
+            // 多条 chr/start/end/strand/seq 完全相同的冗余引物（BED 多条重复、tooltip 同位串显）
+            int merged = PrimerStore.mergeDuplicatePrimers(add, group);
             dispose();
             PrimerPlugin.ensureTrackForGroup(group);
             PrimerStore.addAll(add);
             boolean single = chosen.size() == 1 && chosen.get(0).isSingle();
             JOptionPane.showMessageDialog(this,
                     "已加入 " + chosen.size() + (single ? " 条引物" : " 对引物")
-                            + "（共 " + add.size() + " 条）到分组「" + group + "」。\n"
-                            + "轨名带 * 表示未落盘：工具条「另存为」可保存为标准引物 BED。",
+                            + "（共 " + add.size() + " 条）到分组「" + group + "」。"
+                            + (merged > 0
+                            ? "\n已合并 " + merged + " 条重复引物（不同产物选中了同一条引物，配对改连保留引物）。" : "")
+                            + "\n轨名带 * 表示未落盘：工具条「另存为」可保存为标准引物 BED。",
                     "primer3 设计结果", JOptionPane.INFORMATION_MESSAGE);
         }
 

@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PrimerPlugin implements IGVPlugin {
 
     /** 插件版本号：显示在引物轨工具条最右侧（开发期对版用）。改功能时同步 +1。 */
-    public static final String VERSION = "v0.1.64";
+    public static final String VERSION = "v0.1.65";
 
     private static boolean inited = false;
     private static final Set<PrimerTrack> knownTracks = new LinkedHashSet<PrimerTrack>();
@@ -52,6 +52,8 @@ public class PrimerPlugin implements IGVPlugin {
             // 这里起一个轻量守护定时器，定时确认已知引物轨存在，不在就自动加回，
             // 从而保证「打开 session 不影响引物轨」。间隔 1.5s，开销可忽略。
             startPrimerTrackKeeper();
+            // v0.1.65：全局 Shift+拖动选区监听（无需进入编辑模式）； keeper 里也会补挂新面板
+            try { PrimerEditTool.ensureShiftSelectors(); } catch (Throwable ignore) { }
         } catch (Throwable e) {
             org.apache.log4j.Logger.getLogger(PrimerPlugin.class).error("PrimerPlugin init failed", e);
         }
@@ -169,6 +171,8 @@ public class PrimerPlugin implements IGVPlugin {
                             try { igv.addTracks(Collections.singletonList(t), PanelName.DATA_PANEL); } catch (Throwable ignore) { }
                         }
                     }
+                    // v0.1.65：session 重建数据面板后，给新 DataPanel 补挂 Shift 选区监听
+                    try { PrimerEditTool.ensureShiftSelectors(); } catch (Throwable ignore) { }
                 } catch (Throwable ignore) {
                     // 守护线程容错：任何异常都不影响主线程
                 }
