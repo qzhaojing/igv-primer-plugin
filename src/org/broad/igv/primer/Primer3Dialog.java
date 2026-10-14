@@ -140,51 +140,72 @@ public class Primer3Dialog {
     /**
      * v0.1.61：鼠标选区 → 设计框填充值（产物区间 + 上/下游引物设计区）。
      * v0.1.65：侧翼默认改为左右 100~200bp（老板："左右留出100-200bp作为上下游引物区间"）。
+     * v0.1.67：侧翼语义重写（flank 三档）——裁窄后保 lenMax 而非 minLen，仍不够则伸出视野。
      *
      * 语义（老板需求）：
-     *  - 产物区间 = 选区，钳到当前视野内（引物设计区域必须在屏幕内，设计结果直接可视）；
-     *  - 上游区 = 选区左缘外 100~200bp，下游区 = 选区右缘外 100~200bp
-     *    （未指定引物设计区域时的默认值），同样钳到视野；被视野裁到不足 minLen 时
-     *    贴视野边缘退化（允许伸进选区边缘，好过抛异常）。
+     *  - 产物区间 = 选区，钳到当前视野内；
+     *  - 上游区 = 选区左缘外 flankMin~flankMax bp，下游区 = 选区右缘外 flankMin~flankMax bp；
+     *  - 被视野裁到装不下最长引物（lenMax）时：先紧贴选区缘取视野内最大宽，仍不够则
+     *    伸出视野（保设计能力优先，out 标志=1，调用方警告"引物可能在屏幕外"）。
      *
      * @param selS0,selE0 选区（0-based，end 含；起止可倒）
      * @param vpS0,vpE0   当前视野（0-based，end 不含）；传 0/Integer.MAX_VALUE = 不钳
-     * @param minLen      最短引物长（侧翼退化兜底用）
-     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长}（显示就绪：1-based inclusive + 长度）；
+     * @param minLen      最短引物长
+     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长, 上游超视野, 下游超视野}
+     *         （显示就绪：1-based inclusive + 长度；超视野=0/1，v0.1.67 新增末两位）；
      *         选区完全在视野外返回 null（调用方回退视口填充）
      */
     public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen) {
         return fillFromSelection(selS0, selE0, vpS0, vpE0, minLen, 100, 200);
     }
 
-    /** 同上，侧翼范围可指定（测试/高级参数用）。 */
+    /** 同上，侧翼范围可指定（测试/高级参数用；lenMax 默认 max(minLen,30)）。 */
     public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen,
                                           int flankMin, int flankMax) {
+        return fillFromSelection(selS0, selE0, vpS0, vpE0, minLen, flankMin, flankMax,
+                Math.max(minLen, 30));
+    }
+
+    /**
+     * v0.1.67：lenMax=引物长上限——侧翼至少要装得下最长引物，否则 primer3 无解
+     * （旧版只保 minLen=18，18bp 区对 18nt 引物零余量，老板截图实锤）。
+     */
+    public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen,
+                                          int flankMin, int flankMax, int lenMax) {
         int s0 = Math.min(selS0, selE0), e0 = Math.max(selS0, selE0);
         int ps = Math.max(s0, vpS0);
         int pe = Math.min(e0, vpE0 - 1);
         if (pe < ps) return null;                       // 选区已不在屏幕内（平移/缩放走了）
-        int[] up = flank(ps, -1, vpS0, vpE0, minLen, flankMin, flankMax);
-        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, flankMin, flankMax);
-        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1};
+        int[] up = flank(ps, -1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
+        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
+        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1,
+                up[2], dn[2]};
     }
 
     /**
      * v0.1.65：无鼠标选区 → 按当前视口填充（老板："产物区间设定为显示 range 的子集，
      * 左右留出 100-200bp 作为上下游引物区间，这样引物设计出来可以直接可视"）。
+     * v0.1.67：上下游走 flank 三档语义（装不下最长引物时紧贴/伸出视野，见 flank 注释）。
      *
      * 语义：
      *  - 产物区间 = 视野向内收缩 margin（默认 150，范围 100~200）的子集；
      *  - 上游区 = 产物左缘外 flankMin~flankMax bp，下游区 = 产物右缘外 flankMin~flankMax bp；
-     *  - 全部钳在视野内 → 产物+引物都在屏幕内，设计结果直接可视。
+     *  - 尽量钳在视野内；窄视野下保设计能力优先（out=1 时上游/下游超出屏幕）。
      *
      * @param vpS0,vpE0 当前视野（0-based，end 不含）
      * @param minLen    最短引物长（兜底）
      * @param margin    视口边距（产物距视野左右缘的距离）
-     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长}（1-based inclusive + 长度）
+     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长, 上游超视野, 下游超视野}
      */
     public static int[] fillFromViewport(int vpS0, int vpE0, int minLen, int margin,
                                          int flankMin, int flankMax) {
+        return fillFromViewport(vpS0, vpE0, minLen, margin, flankMin, flankMax,
+                Math.max(minLen, 30));
+    }
+
+    /** v0.1.67：lenMax=引物长上限（侧翼至少装得下最长引物）。 */
+    public static int[] fillFromViewport(int vpS0, int vpE0, int minLen, int margin,
+                                         int flankMin, int flankMax, int lenMax) {
         int ps = vpS0 + margin;
         int pe = vpE0 - 1 - margin;
         if (pe - ps + 1 < minLen) {   // 视野太窄：取中段 minLen 兜底（仍钳在视野内）
@@ -193,30 +214,45 @@ public class Primer3Dialog {
             pe = ps + minLen - 1;
             if (pe > vpE0 - 1) { pe = vpE0 - 1; ps = Math.max(vpS0, pe - minLen + 1); }
         }
-        int[] up = flank(ps, -1, vpS0, vpE0, minLen, flankMin, flankMax);
-        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, flankMin, flankMax);
-        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1};
+        int[] up = flank(ps, -1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
+        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
+        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1,
+                up[2], dn[2]};
     }
 
     /**
-     * v0.1.61：选段单侧侧翼引物设计区（0-based inclusive）。
-     * v0.1.65：侧翼范围参数化（默认 100~200bp）。
-     * 理想 = 选段边缘外 flankMin~flankMax bp；被视野裁窄（<minLen）时贴视野边重新取 minLen。
-     * dir=-1 上游（选段左缘 edge0），dir=+1 下游（选段右缘 edge0）。
+     * v0.1.67：选段单侧侧翼引物设计区（0-based inclusive，长度含两端）。
+     *
+     * 老板截图实锤的 bug：窄视野（~85bp）下旧实现把上下游区退化成 18bp（=minLen）
+     * 且伸进产物区——18bp 装 18nt 引物零余量，primer3 必无解。
+     * 新语义（按优先级）：
+     *  1) 理想 = 选段边缘外 flankMin~flankMax bp；被视野裁窄后仍 ≥ lenMax（最长引物长）
+     *     → 直接用（大视野场景不变，保持"缘外 100~200"原语义）；
+     *  2) 裁后 < lenMax → **紧贴选段缘**取视野内最大宽度（上游 [vpS0..edge0-1]、
+     *     下游 [edge0+1..vpE0-1]），≥lenMax 即可用（不再伸进产物区）；
+     *  3) 紧贴仍 < lenMax（视野缘离选段太近）→ **伸出视野**取 want 宽
+     *     （want = max(flankMax-flankMin+1, lenMax)），out=1 让调用方警告
+     *     "引物区已超出屏幕，设计结果需缩放查看"——保设计能力优先于可视性。
+     *
+     * @return {a, b, out}（0-based inclusive；out=1 表示该侧翼超出视野）
      */
-    private static int[] flank(int edge0, int dir, int vpS0, int vpE0, int minLen,
+    private static int[] flank(int edge0, int dir, int vpS0, int vpE0, int minLen, int lenMax,
                                int flankMin, int flankMax) {
+        int want = Math.max(flankMax - flankMin + 1, lenMax);   // 目标宽度：至少装下最长引物
         int a, b;
         if (dir < 0) { b = edge0 - flankMin; a = edge0 - flankMax; }
         else         { a = edge0 + flankMin; b = edge0 + flankMax; }
-        a = Math.max(a, vpS0);
-        b = Math.min(b, vpE0 - 1);
-        if (b - a + 1 >= minLen) return new int[]{a, b};
-        // 被视野裁窄：贴视野边缘退化（允许伸进选区，保证正长度）
-        if (dir < 0) { a = vpS0; b = Math.max(edge0 - 1, a + minLen - 1); }
-        else         { b = vpE0 - 1; a = Math.min(edge0 + 1, b - minLen + 1); }
-        if (b < a) { int t = a; a = b; b = t; }
-        return new int[]{a, b};
+        int ca = Math.max(a, vpS0), cb = Math.min(b, vpE0 - 1);
+        if (cb >= ca && cb - ca + 1 >= lenMax) return new int[]{ca, cb, 0};   // 1) 理想（裁后仍装得下最长引物）
+        // 2) 紧贴选段缘，取视野内最大宽度（不再伸进产物区）
+        int ha, hb;
+        if (dir < 0) { hb = edge0 - 1; ha = Math.max(vpS0, hb - want + 1); }
+        else         { ha = edge0 + 1; hb = Math.min(vpE0 - 1, ha + want - 1); }
+        if (hb >= ha && hb - ha + 1 >= lenMax) return new int[]{ha, hb, 0};
+        // 3) 视野内连最长引物都放不下 → 伸出视野（保设计能力），宽 want
+        if (dir < 0) { b = edge0 - 1; a = Math.max(0, b - want + 1); }
+        else         { a = edge0 + 1; b = a + want - 1; }
+        return new int[]{a, b, 1};
     }
 
     /** v0.1.59：高级参数收集——文本框非空才写入（空 = 用 primer3 自己的默认值）。 */
@@ -391,7 +427,8 @@ public class Primer3Dialog {
             fillPanel.add(flankMinF);
             fillPanel.add(new JLabel("-"));
             fillPanel.add(flankMaxF);
-            fillPanel.add(new JLabel("bp（无选区时：产物=视野内缩边距，上下游=产物两侧侧翼，均在屏幕内）"));
+            fillPanel.add(new JLabel("bp（无选区时：产物=视野内缩边距，上下游=产物两侧侧翼；"
+                    + "视口过窄时上下游将超出屏幕并提示，不会压成无解小区间）"));
 
             JPanel regionPanel = new JPanel();
             regionPanel.setLayout(new BoxLayout(regionPanel, BoxLayout.Y_AXIS));
@@ -414,19 +451,22 @@ public class Primer3Dialog {
             if (sel != null) {
                 int lenMin0 = 18;
                 try { lenMin0 = Integer.parseInt(lenMinF.getText().trim()); } catch (Exception ignore) {}
+                int lenMax0 = readBounded(lenMaxF, 27, 1, 1000);   // v0.1.67：侧翼至少装得下最长引物
                 int vpS = vp != null ? Integer.parseInt(vp[1]) : 0;
                 int vpE = vp != null ? Integer.parseInt(vp[2]) : Integer.MAX_VALUE;
-                int[] f = fillFromSelection(Integer.parseInt(sel[1]), Integer.parseInt(sel[2]), vpS, vpE, lenMin0);
+                int[] f = fillFromSelection(Integer.parseInt(sel[1]), Integer.parseInt(sel[2]),
+                        vpS, vpE, lenMin0, 100, 200, lenMax0);
                 if (f != null) {
                     int maxLen = single ? 2000 : 19000;
                     if (f[1] - f[0] + 1 > maxLen) {   // 选区超长（缩到染色体级）：取中段后重算侧翼
                         int[] c = clampMid(f[0] - 1, f[1], maxLen);
-                        f = fillFromSelection(c[0], c[1] - 1, vpS, vpE, lenMin0);
+                        f = fillFromSelection(c[0], c[1] - 1, vpS, vpE, lenMin0, 100, 200, lenMax0);
                     }
                     tStartF.setText(String.valueOf(f[0]));
                     tEndF.setText(String.valueOf(f[1]));
                     uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                     dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
+                    boolean outView = f.length > 6 && (f[6] != 0 || f[7] != 0);   // v0.1.67：上下游超出屏幕
                     if (!single) {
                         // 高级模式：显示上下游框（modeBox 监听器稍后才注册，不会同步触发，需手动设可见性）
                         modeBox.setSelectedIndex(1);
@@ -439,6 +479,11 @@ public class Primer3Dialog {
                         statusL.setText("<html><font color='gray'>已按选定区域填充引物区域 "
                                 + f[0] + "-" + f[1] + "</font></html>");
                     }
+                    if (outView) {
+                        statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：上下游引物区已超出当前屏幕"
+                                + "（为保住可设计性未强行压成 minLen 小区间）。设计出的引物可能在屏幕外——"
+                                + "缩放即可见；或放大视野后重新打开本对话框。</font></html>");
+                    }
                 } else {
                     selOffscreen = true;
                     sel = null;   // 回退视口
@@ -447,15 +492,17 @@ public class Primer3Dialog {
             if (sel == null && vp != null) {
                 // v0.1.65：无选区 → 产物=视野子集（左右各留 margin，默认150），上下游=产物两侧
                 // flankMin~flankMax（默认100~200）——产物+引物全在屏幕内，设计结果直接可视。
+                // v0.1.67：窄视野下 flank 三档语义可能让上下游超出屏幕（out=1），弹警告。
                 int s0 = Integer.parseInt(vp[1]);
                 int e0 = Integer.parseInt(vp[2]);
                 if (s0 > e0) { int t = s0; s0 = e0; e0 = t; }
                 int lenMin0 = 18;
                 try { lenMin0 = Integer.parseInt(lenMinF.getText().trim()); } catch (Exception ignore) {}
+                int lenMax0 = readBounded(lenMaxF, 27, 1, 1000);
                 int margin = readBounded(vpMarginF, 150, 0, 2000);
                 int fMin = readBounded(flankMinF, 100, 0, 5000);
                 int fMax = readBounded(flankMaxF, 200, fMin, 5000);
-                int[] f = fillFromViewport(s0, e0, lenMin0, margin, fMin, fMax);
+                int[] f = fillFromViewport(s0, e0, lenMin0, margin, fMin, fMax, lenMax0);
                 tStartF.setText(String.valueOf(f[0]));
                 tEndF.setText(String.valueOf(f[1]));
                 uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
@@ -465,12 +512,18 @@ public class Primer3Dialog {
                     simplePanel.setVisible(true);
                     advPanel.setVisible(true);
                 }
+                boolean outView = f.length > 6 && (f[6] != 0 || f[7] != 0);
                 if (selOffscreen) {
                     statusL.setText("<html><font color='gray'>选区已不在当前屏幕，已按当前视图填充</font></html>");
                 } else {
                     statusL.setText("<html><font color='gray'>已按当前视图填充：产物 " + f[0] + "-" + f[1]
                             + "（视野内缩 " + margin + "bp）；上游 " + f[2] + "+" + f[3] + "bp；下游 "
                             + f[4] + "+" + f[5] + "bp——产物与引物均在屏幕内，设计结果直接可视</font></html>");
+                }
+                if (outView) {
+                    statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：上下游引物区已超出当前屏幕"
+                            + "（为保住可设计性未强行压成 minLen 小区间）。设计出的引物可能在屏幕外——"
+                            + "缩放即可见；或放大视野后重新打开本对话框。</font></html>");
                 }
             }
 

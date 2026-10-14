@@ -687,6 +687,32 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             new java.util.IdentityHashMap<DataPanel, AbstractDataPanelTool>();
     private static final java.util.Set<DataPanel> shiftAdapters =
             java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<DataPanel, Boolean>());
+    private static volatile DataPanel lastPanel;   // v0.1.67：最近交互的 DataPanel（tooltip 取鼠标坐标用）
+
+    /**
+     * v0.1.67：当前鼠标在 DataPanel 内的坐标（实时，MouseInfo 取指针屏幕位置转换）。
+     * tooltip 钩子 getValueStringAt 没有 mouseY 参数，IGV 也不暴露 DataPanel——
+     * 用这个坐标跑行感知命中，修复"鼠标在下面引物却显示上面引物信息"的串显。
+     * 鼠标不在任何数据面板上 / 拿不到 → 返回 null（调用方回退 bp 命中）。
+     */
+    public static int[] mousePanelXY() {
+        try {
+            DataPanel dp = lastPanel;
+            if (dp == null) {
+                java.util.List<DataPanel> ps = findDataPanels();
+                if (ps.isEmpty()) return null;
+                dp = ps.get(0);
+            }
+            java.awt.Point ml = java.awt.MouseInfo.getPointerInfo().getLocation();
+            if (ml == null) return null;
+            java.awt.Point local = new java.awt.Point(ml);
+            SwingUtilities.convertPointFromScreen(local, dp);
+            if (local.x < 0 || local.y < 0 || local.x > dp.getWidth() || local.y > dp.getHeight()) return null;
+            return new int[]{local.x, local.y};
+        } catch (Throwable t) {
+            return null;
+        }
+    }
 
     /** 反射读取 DataPanel.currentTool（私有字段，无 getter）。setCurrentTool 只收 AbstractDataPanelTool。 */
     private static AbstractDataPanelTool currentToolOf(DataPanel dp) {
@@ -703,6 +729,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     /** 给一个 DataPanel 挂 Shift 选区监听（幂等）。 */
     public static synchronized void installShiftSelector(final DataPanel dp) {
         if (dp == null || shiftAdapters.contains(dp)) return;
+        lastPanel = dp;   // v0.1.67：tooltip 行感知命中要用（拿鼠标坐标转 panel 坐标）
         javax.swing.event.MouseInputAdapter ma = new javax.swing.event.MouseInputAdapter() {
             @Override
             public void mousePressed(java.awt.event.MouseEvent e) {

@@ -47,15 +47,17 @@ public class TestP5 {
         int[] fRev = Primer3Dialog.fillFromSelection(11500, 11000, 10000, 13000, 18);
         check(fRev != null && Arrays.equals(fRev, f), "起止倒转自动交换");
 
-        // 左缘贴边：选区起点=视野起点 → 上游退化为贴视野左缘、长度≥minLen
+        // 左缘贴边：选区起点=视野起点 → 上游在屏幕内零空间。
+        // v0.1.67 语义变更：旧实现给 18bp 烂区间（且伸进产物区）→ primer3 必无解；
+        // 新实现伸出视野取 101bp（want=max(flankMax-flankMin+1, lenMax)），out=1 由对话框警告。
         int[] fL = Primer3Dialog.fillFromSelection(10000, 10500, 10000, 13000, 18);
-        check(fL != null && fL[2] == 10001 && fL[3] >= 18,
-                "上游贴视野左缘退化 (起=" + fL[2] + " 长=" + fL[3] + ")");
+        check(fL != null && fL[2] == 9900 && fL[3] == 101 && fL[6] == 1,
+                "左缘齐平→上游伸出视野 101bp out=1 (起=" + fL[2] + " 长=" + fL[3] + ")");
 
-        // 右缘贴边：选区终点=视野末 → 下游退化为贴视野右缘、长度≥minLen
+        // 右缘贴边：选区终点=视野末 → 下游同样伸出视野 101bp（旧实现为贴边 18bp）
         int[] fR = Primer3Dialog.fillFromSelection(12000, 12999, 10000, 13000, 18);
-        check(fR != null && fR[4] + fR[5] - 1 == 13000 && fR[5] >= 18,
-                "下游贴视野右缘退化 (止=" + (fR[4] + fR[5] - 1) + " 长=" + fR[5] + ")");
+        check(fR != null && fR[4] + fR[5] - 1 == 13101 && fR[5] == 101 && fR[7] == 1,
+                "右缘齐平→下游伸出视野 101bp out=1 (止=" + (fR[4] + fR[5] - 1) + " 长=" + fR[5] + ")");
 
         // 选区右端超出视野 → 产物钳到视野内（引物设计区域限屏幕内）
         int[] fOver = Primer3Dialog.fillFromSelection(12500, 13500, 10000, 13000, 18);

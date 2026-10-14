@@ -13,6 +13,7 @@ import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.geom.GeneralPath;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -923,11 +924,20 @@ public class PrimerTrack extends AbstractTrack {
      * v0.1.31：鼠标悬停信息框（IGV tooltip 钩子，需开启 View → Show details on hover）。
      * 返回 HTML 片段，由 DataPanel.updateTooltipText 包上 <html> 拼接显示，<br> 换行。
      * 引物名称标签已精简为只显示名称，全部详细信息（Tm/GC/二聚体/序列/状态）集中在此悬浮框。
+     *
+     * v0.1.67 串显修复（老板截图：鼠标在下面引物上却显示上面引物的信息）：
+     * 旧实现只按基因组坐标 hitTest(bp)——不分行、且正序返回先加入者。多条引物
+     * x 范围重叠（不同行）时必串。现优先用**鼠标实时坐标**跑行感知命中
+     * （PrimerTrack.hitTest(x,y,chr)，上下行可区分）；拿不到鼠标坐标或行感知未命中
+     * 时，bp 兜底改为**后画优先**（hitTestBpLast）。
      */
     @Override
     public String getValueStringAt(String chr, double position, int mouseX, org.broad.igv.ui.panel.ReferenceFrame frame) {
         try {
-            Primer p = hitTest((int) position, chr);
+            Primer p = null;
+            int[] mp = PrimerEditTool.mousePanelXY();   // 鼠标在 DataPanel 内的实时坐标
+            if (mp != null) p = hitTest(mp[0], mp[1], chr);
+            if (p == null) p = hitTestBpLast((int) position, chr);
             if (p == null) return null;
             StringBuilder sb = new StringBuilder();
             sb.append("<b>").append(p.name).append("</b>")
@@ -985,7 +995,7 @@ public class PrimerTrack extends AbstractTrack {
         } catch (Throwable t) {
             h = null;
         }
-        if (h == null) h = hitTest(clickBp, e.getFrame().getChrName());
+        if (h == null) h = hitTestBpLast(clickBp, e.getFrame().getChrName());   // v0.1.67：兜底也后画优先
         final Primer hit = h;
 
         if (hit != null) {
@@ -1334,12 +1344,25 @@ public class PrimerTrack extends AbstractTrack {
         }
     }
 
-    /** 命中测试（基因组坐标，退化用） */
+    /** 命中测试（基因组坐标，退化用；正序=先加入者优先，保持旧语义） */
     public Primer hitTest(int bp, String chr) {
-        for (Primer p : PrimerStore.getPrimers()) {
-            if (chr.equals(p.chr) && inGroup(p) && bp >= p.start && bp < p.end) return p;
-        }
-        return null;
+        return PrimerStore.hitByPosition(groupPrimers(), chr, bp, false);
+    }
+
+    /**
+     * v0.1.67：bp 命中兜底（行感知不可用时）——后加入/后画的优先，与绘制上层优先一致。
+     * 正序版本会把先加入的引物当命中结果：P1_F/P2_F 同在视野左侧（不同行）时，
+     * 鼠标停在 P2_F 上也返回 P1_F → tooltip 串显（老板截图实锤）。
+     */
+    public Primer hitTestBpLast(int bp, String chr) {
+        return PrimerStore.hitByPosition(groupPrimers(), chr, bp, true);
+    }
+
+    /** 本轨分组内的引物（inGroup 过滤后的副本，供命中测试用）。 */
+    private List<Primer> groupPrimers() {
+        List<Primer> mine = new ArrayList<Primer>();
+        for (Primer p : PrimerStore.getPrimers()) if (inGroup(p)) mine.add(p);
+        return mine;
     }
 
     /** v8 行感知命中测试（屏幕坐标，两轮：先精确引物条 ±3px，再含延长区 ±16px；后画优先=上层优先） */

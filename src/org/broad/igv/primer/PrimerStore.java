@@ -407,6 +407,27 @@ public class PrimerStore {
         return max + 1;
     }
 
+    /**
+     * v0.1.67：按基因组坐标命中引物（不分行；行感知命中在 PrimerTrack.hitTest(x,y,chr)）。
+     * lastFirst=true 时**倒序**遍历——后加入/后画的优先，与绘制"上层优先"一致；
+     * tooltip 的 bp 兜底路径专用（根因：旧兜底正序返回先加入者，P1_F/P2_F 同在视野
+     * 左侧时鼠标停在 P2_F 上也显示 P1_F 信息，老板截图实锤串显）。
+     */
+    public static synchronized Primer hitByPosition(List<Primer> ps, String chr, int bp, boolean lastFirst) {
+        if (ps == null || chr == null) return null;
+        if (lastFirst) {
+            for (int i = ps.size() - 1; i >= 0; i--) {
+                Primer p = ps.get(i);
+                if (chr.equals(p.chr) && bp >= p.start && bp < p.end) return p;
+            }
+        } else {
+            for (Primer p : ps) {
+                if (chr.equals(p.chr) && bp >= p.start && bp < p.end) return p;
+            }
+        }
+        return null;
+    }
+
     /** 是否存在同名引物；exclude 非空时排除它（编辑自身名称不算重复） */
     public static synchronized boolean hasName(String name) {
         return hasName(name, null);
