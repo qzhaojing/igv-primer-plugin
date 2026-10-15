@@ -49,6 +49,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     private boolean panning = false;
     private boolean selecting = false;   // v0.1.63：Shift+拖拽纯选区（不平移）
     private static boolean shiftOn = false;   // v0.1.65：Shift 选区可视化生效中（非编辑模式也画）
+    private static boolean selBox = false;    // v0.1.70：选中引物框可视化生效中（点击即显示）
+    private static long selBoxKey = 0;       // v0.1.70：上次同步的位置指纹（变化检测用）
     private Primer dragging;
     private int dragAnchorBp;
     private int origStart, origEnd;
@@ -247,7 +249,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 java.awt.Point pB = SwingUtilities.convertPoint(dp, 0, dp.getHeight(), rulerGlass);
                 top = pT.y; bot = pB.y;
             }
-            rulerGlass.active = inEditMode() || shiftOn;
+            // v0.1.70：选中引物框也走同一套淡色区间绘制（点击即显示）
+            rulerGlass.active = inEditMode() || shiftOn || selBox;
             rulerGlass.xs = new int[]{p1.x, p2.x};
             rulerGlass.yTop = top;
             rulerGlass.yBot = bot;
@@ -260,11 +263,12 @@ public class PrimerEditTool extends AbstractDataPanelTool {
 
     /** v0.1.48：全窗 ruler 是否正在生效（生效时 PrimerTrack 不再重复画局部红线，避免两条重叠） */
     public static boolean rulerActive() {
-        return (inEditMode() || shiftOn) && rulerGlass != null && rulerGlass.active && rulerGlass.xs != null;
+        return (inEditMode() || shiftOn || selBox) && rulerGlass != null && rulerGlass.active && rulerGlass.xs != null;
     }
 
     private static void clearGuides() {
         guides = null;
+        selBox = false;   // v0.1.70：选中框标志一并清
         if (rulerGlass != null) {
             rulerGlass.active = false;
             rulerGlass.xs = null;
@@ -493,12 +497,12 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (hit != null && e.isControlDown()) {
             Primer sel = PrimerStore.selected;
             if (sel == null || sel == hit) {
-                PrimerStore.selected = hit;       // 首次/再次点击：定为锚点（配对基准）
+                setSelected(hit);       // 首次/再次点击：定为锚点（配对基准）
             } else {
                 // v0.1.41 边模型：Ctrl+点击 切换 sel 与 hit「这一条」边的连线——
                 // 已连则只删这一条（不影响 sel/hit 的其他边）；未连则只加这一条（天然支持一引物多连）。
                 PrimerStore.toggleEdge(sel, hit);
-                PrimerStore.selected = sel;        // 锚点保持选中，便于连续操作
+                setSelected(sel);        // 锚点保持选中，便于连续操作
             }
             dp.requestFocusInWindow();             // v0.1.51：同普通选中，焦点回收
             e.consume();                              // 阻止 IGV 原生 pan/zoom 对 Ctrl 点击的响应
@@ -519,7 +523,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             pressY = y;
             Integer r0 = PrimerTrack.allScreenRows().get(hit);
             origRow = r0 == null ? 0 : r0;
-            PrimerStore.selected = hit;
+            setSelected(hit);
             // v0.1.51：选中后把焦点抢回数据面板，否则焦点滞留搜索框等组件，方向键被其自身绑定吞掉
             dp.requestFocusInWindow();
             dp.repaint();
@@ -527,7 +531,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
         // 空白：清除选中 + 委托原生 PanTool 平移视图
         if (PrimerStore.selected != null) {
-            PrimerStore.selected = null;
+            setSelected(null);
             PrimerStore.refresh();
         }
         // v0.1.57：空白拖拽=平移+顺带记录选区（松手后右键「设计*」可预填）；单击不留选区
@@ -798,7 +802,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 ReferenceFrame frame = frameOf(e);
                 if (frame == null) return;
                 Primer hit = PrimerTrack.hitTestAny(e.getX(), e.getY(), frame.getChrName());
-                PrimerStore.selected = hit;   // 命中=选中（兼配对锚点）；空白=取消选中
+                setSelected(hit);   // 命中=选中（兼配对锚点）；空白=取消选中
                 ((DataPanel) e.getSource()).repaint();
             }
         };
@@ -842,6 +846,67 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     }
 
     public static boolean newPrimerArmed() { return newArm; }
+
+    /**
+     * v0.1.70：选中/取消引物的统一入口——顺便维护「选中引物淡色框」。
+     * 老板需求："引物目前按住左右拉动时候才会显示出淡色边界，实际使用上如果想查看某个引物
+     * 和 ref 的位置但是不想拖动，无法看到淡色边界框很不方便。修正为，点击某引物，
+     * 直接显示出淡色框，拖动也显示，这样就很方便。"
+     */
+    public static void setSelected(Primer p) {
+        PrimerStore.selected = p;   // 直接赋值（勿改成 setSelected，会无限递归）
+        markSelectedBox(p);
+    }
+
+    /**
+     * v0.1.70：把选中引物所占区间画成贯穿数据面板的淡色框（与 Shift 选区同款外观）。
+     * 点击即显示（selBox 标志），拖动/Shift 选区照旧；取消选中时清除（拖动中的框优先保留）。
+     */
+    /**
+     * v0.1.70：render 时同步选中框位置——视图平移/缩放后框要跟着目标引物走，
+     * 否则玻璃层上的框会留在旧的屏幕坐标上（点击后平移视图，框就和引物错位了）。
+     * 用「引物位置+视图起点」指纹做变化检测，静止时不做无用重算。
+     */
+    public static void syncSelectedBox(Primer sel) {
+        if (!selBox || sel == null || rulerGlass == null) return;
+        try {
+            ReferenceFrame f = IGV.getInstance() == null ? null
+                    : IGV.getInstance().getSession().getReferenceFrame();
+            if (f == null) return;
+            long key = ((long) sel.start * 31L + sel.end) * 131L + (long) f.getOrigin();
+            if (key == selBoxKey) return;
+            selBoxKey = key;
+            markSelectedBox(sel);
+        } catch (Throwable ignore) {
+        }
+    }
+
+    private static void markSelectedBox(Primer p) {
+        try {
+            if (p == null) {
+                if (inEditMode() || shiftOn) return;   // 别把正在拖动的选区框清掉
+                selBox = false;
+                clearGuides();
+                return;
+            }
+            if (IGV.getInstance() == null || IGV.getInstance().getSession() == null) return;
+            ReferenceFrame f = IGV.getInstance().getSession().getReferenceFrame();
+            if (f == null || f.getChrName() == null || !f.getChrName().equals(p.chr)) {
+                selBox = false;
+                clearGuides();
+                return;
+            }
+            DataPanel dp = lastPanel;
+            if (dp == null) {
+                java.util.List<DataPanel> ps = findDataPanels();
+                if (ps.isEmpty()) return;
+                dp = ps.get(0);
+            }
+            selBox = true;
+            updateRuler(dp, f, p.start, p.end);
+        } catch (Throwable ignore) {
+        }
+    }
 
     /** 布防态点击：以点击点为中心放一条默认长度引物（"一一对应"），弹编辑框微调。 */
     private static void placeNewPrimer(java.awt.event.MouseEvent e) {
@@ -900,17 +965,17 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         final DataPanel dp = (DataPanel) e.getSource();
         if (hit == null) {
             if (PrimerStore.selected != null) {   // 取消锚点
-                PrimerStore.selected = null;
+                setSelected(null);
                 dp.repaint();
             }
             return;   // 不消费：Ctrl+空白仍归 IGV 原生
         }
         Primer sel = PrimerStore.selected;
         if (sel == null || sel == hit) {
-            PrimerStore.selected = hit;            // 首个锚点
+            setSelected(hit);            // 首个锚点
         } else {
             PrimerStore.toggleEdge(sel, hit);      // 连/断这一条边（同向会弹窗拒绝）
-            PrimerStore.selected = sel;            // 锚点保持，便于连续配对
+            setSelected(sel);            // 锚点保持，便于连续配对
         }
         e.consume();
         dp.repaint();
@@ -927,7 +992,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 "删除引物（Del）", JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
         PrimerStore.remove(sel);
-        PrimerStore.selected = null;
+        setSelected(null);
     }
 
     /** E：编辑选中引物。 */
@@ -974,7 +1039,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         clearGhost();
         clearSelection();   // 含 shiftOn / ruler 参考线
         if (wasArmed || PrimerStore.selected != null) {
-            PrimerStore.selected = null;
+            setSelected(null);
             PrimerStore.refresh();
         }
     }

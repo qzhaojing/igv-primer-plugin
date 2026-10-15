@@ -127,6 +127,8 @@ public class PrimerTrack extends AbstractTrack {
         // newH 恒 = oldH + 28 ≠ oldH → 每次点击/按键都触发全量 doRefresh()（重绘 14 轨 + 重载数据）→ 严重卡死。
         int needH = Math.max(60, TOOLBAR_H + nRows * ROW_H + 14);
         if (getHeight() != needH) setHeight(needH);
+        // v0.1.70：视图平移/缩放后，玻璃层上的选中引物淡色框要跟着引物走（变化检测内部已去抖）
+        PrimerEditTool.syncSelectedBox(PrimerStore.selected);
 
         // 1) 配对连线（边模型 v0.1.41）：每条 F-R 边独立画一条曲线，不再按组画完全图。
         //    支持一引物多连（如 R1 同时连 F1/F2/F3 = 三条独立曲线），也绝不会出现 F-F / R-R 错误连线。
@@ -670,8 +672,17 @@ public class PrimerTrack extends AbstractTrack {
      *  - rowOverride（上下拖动手动指定行）最优先。
      *  - 配对组 size==2 强制同一行；size>2 各占独立行（曲线汇聚渲染）。
      *  - 未配对引物按"不重叠 + 同组"放同一行；重叠或异组 → 换行。
+     *
+     * v0.1.70：多对引物自动分行（老板："设计出多对引物，但是多对引物位于同一行，很难看，
+     * 需要手动调整。修正，多引物不重叠"）。
+     *   旧行为：不重叠的引物一律贪心塞第一个空行 → 5 对引物全挤在 row 0 一条长行，
+     *   看不清哪条属于哪对，只能手动上下拖动调整。
+     *   新行为（PrimerStore.onePairPerRow，默认开）：每个配对连通分量**独占一行**
+     *   （不再与其他配对组共行）；未配对单引物优先放没有配对组的行。
+     *   引物极多导致轨过高时，菜单可关掉该开关回到紧凑共行。
      */
-    private static java.util.Map<Primer, Integer> layoutRows(List<Primer> vis) {
+    public static java.util.Map<Primer, Integer> layoutRows(List<Primer> vis) {
+        final boolean onePair = PrimerStore.onePairPerRow;
         java.util.Map<Primer, Integer> map = new java.util.HashMap<Primer, Integer>();
         java.util.List<java.util.List<Primer>> rows = new java.util.ArrayList<java.util.List<Primer>>();
 
@@ -713,6 +724,8 @@ public class PrimerTrack extends AbstractTrack {
                 public java.util.List<Primer> apply(Integer k) { return new java.util.ArrayList<Primer>(); }
             }).add(freeP.get(i));
         }
+        // v0.1.70：记录被配对组占用的行（单引物摆放时避开，避免一对+一堆单引物混在同一行）
+        java.util.Set<Integer> compRows = new java.util.HashSet<Integer>();
         for (java.util.List<Primer> comp : comps.values()) {
             if (comp.size() < 2) continue;
             java.util.List<Primer> fixed = new java.util.ArrayList<Primer>();
@@ -723,15 +736,29 @@ public class PrimerTrack extends AbstractTrack {
             }
             if (members.isEmpty()) continue;
             if (fixed.isEmpty()) {
-                long lo = Long.MAX_VALUE, hi = Long.MIN_VALUE;
-                for (Primer m : members) { long[] sp = spanOf(m); lo = Math.min(lo, sp[0]); hi = Math.max(hi, sp[1]); }
-                int t = -1;
-                for (int i = 0; i < rows.size(); i++) { if (!rowOverlaps(rows.get(i), lo, hi)) { t = i; break; } }
-                if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+                int t;
+                if (onePair) {
+                    // 每对独占一行：直接开新行，不与其它配对组共行（多对引物一眼分清）
+                    rows.add(new java.util.ArrayList<Primer>());
+                    t = rows.size() - 1;
+                } else {
+                    long lo = Long.MAX_VALUE, hi = Long.MIN_VALUE;
+                    for (Primer m : members) {
+                        long[] sp = spanOf(m);
+                        lo = Math.min(lo, sp[0]); hi = Math.max(hi, sp[1]);
+                    }
+                    t = -1;
+                    for (int i = 0; i < rows.size(); i++) {
+                        if (!rowOverlaps(rows.get(i), lo, hi)) { t = i; break; }
+                    }
+                    if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+                }
                 for (Primer m : members) { rows.get(t).add(m); map.put(m, t); }
+                compRows.add(t);
             } else {
                 Integer r0 = map.get(fixed.get(0));
                 for (Primer m : members) { ensureRows(rows, r0); rows.get(r0).add(m); map.put(m, r0); }
+                compRows.add(r0);
             }
         }
 
@@ -740,12 +767,20 @@ public class PrimerTrack extends AbstractTrack {
             if (map.containsKey(p)) continue;
             String grp = p.group == null ? "" : p.group;
             long[] sp = spanOf(p);
-            int t = -1;
+            int t = -1, tComp = -1;
             for (int i = 0; i < rows.size(); i++) {
-                if (!rowOverlaps(rows.get(i), sp[0], sp[1])
-                        && (rows.get(i).isEmpty() || grp.equals(rowGroupOf(rows.get(i))))) { t = i; break; }
+                if (rowOverlaps(rows.get(i), sp[0], sp[1])) continue;
+                if (!(rows.get(i).isEmpty() || grp.equals(rowGroupOf(rows.get(i))))) continue;
+                // v0.1.70：每对独占行模式下优先放没有配对组的行；配对行只作次选
+                if (compRows.contains(i)) { if (tComp < 0) tComp = i; continue; }
+                t = i;
+                break;
             }
-            if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+            if (t < 0) {
+                // 没有空闲的非配对行：紧凑模式可挤进配对行，每对独占模式另起一行
+                if (tComp >= 0 && !onePair) t = tComp;
+                else { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+            }
             rows.get(t).add(p);
             map.put(p, t);
         }
@@ -1044,6 +1079,14 @@ public class PrimerTrack extends AbstractTrack {
             }
         }));
 
+        if (hit != null) {
+            menu.add(item("删除选中引物", new Runnable() {
+                public void run() {
+                    PrimerStore.remove(hit);
+                }
+            }));
+        }
+
         // v0.1.19：进入/退出编辑模式合并为单一切换项（文案随当前状态变化）
         final boolean inEdit = PrimerEditTool.inEditMode();
         JMenuItem editMode = new JMenuItem(inEdit ? "退出引物编辑模式（拖拽/拖边）" : "进入引物编辑模式（拖拽/拖边）");
@@ -1063,12 +1106,39 @@ public class PrimerTrack extends AbstractTrack {
         }));
 
         if (hit != null) {
-            menu.add(item("删除选中引物", new Runnable() {
+            // v0.1.70：引物专属低频操作收进子菜单（同类项折叠，菜单体积减半）
+            JMenu opsMenu = new JMenu("引物操作 ▸");
+            // v0.1.16：复制选定引物——原引物正下方生成同款，名称末位数字+1
+            opsMenu.add(item("复制选定引物（下方生成）", new Runnable() {
                 public void run() {
-                    PrimerStore.remove(hit);
+                    PrimerStore.duplicate(hit);
                 }
             }));
-            menu.add(item("评估二聚体（重算序列+全局）", new Runnable() {
+            // v0.1.18：取消该引物配对——只断开与之相关的连线；同组其余成员间连线（>=2 条时）保留
+            opsMenu.add(item("取消该引物配对（仅断开相关连线）", new Runnable() {
+                public void run() {
+                    if (hit.pairedWith == null || hit.pairedWith.isEmpty()) {
+                        JOptionPane.showMessageDialog(null, "该引物未参与任何配对。");
+                        return;
+                    }
+                    PrimerStore.unpairForSelected(hit);
+                }
+            }));
+            // v0.1.63：修复同组编号配对——primer3 设计结果按 P{n}_F↔P{n}_R 严格配对，
+            // 误连（Ctrl+点击/历史错边）导致 F 连了别的编号 R 时一键重建
+            opsMenu.add(item("修复同组编号配对（P编号_F↔_R 重建）", new Runnable() {
+                public void run() {
+                    int fixed = PrimerStore.repairNumberedPairs(hit.group);
+                    if (fixed > 0) {
+                        JOptionPane.showMessageDialog(null,
+                                "已重建 " + fixed + " 对编号配对（同编号 F↔R 单边，其余旧边已清除）。\n"
+                                + "单侧编号（单引物设计）与非 P 编号命名（手动多重 PCR）未改动。");
+                    } else {
+                        JOptionPane.showMessageDialog(null, "未发现需要修复的编号配对（或本组无 P编号_F/_R 命名）。");
+                    }
+                }
+            }));
+            opsMenu.add(item("评估二聚体（重算序列+全局）", new Runnable() {
                 public void run() {
                     final java.util.List<Primer> snap = PrimerStore.getPrimers();
                     new javax.swing.SwingWorker<Void, Void>() {
@@ -1082,76 +1152,38 @@ public class PrimerTrack extends AbstractTrack {
                     }.execute();
                 }
             }));
-            // v0.1.16：复制选定引物——原引物正下方生成同款，名称末位数字+1
-            menu.add(item("复制选定引物（下方生成）", new Runnable() {
-                public void run() {
-                    PrimerStore.duplicate(hit);
-                }
-            }));
-            // v0.1.18：取消该引物配对——只断开与之相关的连线；同组其余成员间连线（>=2 条时）保留
-            menu.add(item("取消该引物配对（仅断开相关连线）", new Runnable() {
-                public void run() {
-                    if (hit.pairedWith == null || hit.pairedWith.isEmpty()) {
-                        JOptionPane.showMessageDialog(null, "该引物未参与任何配对。");
-                        return;
-                    }
-                    PrimerStore.unpairForSelected(hit);
-                }
-            }));
-            // v0.1.63：修复同组编号配对——primer3 设计结果按 P{n}_F↔P{n}_R 严格配对，
-            // 误连（Ctrl+点击/历史错边）导致 F 连了别的编号 R 时一键重建
-            menu.add(item("修复同组编号配对（P编号_F↔_R 重建）", new Runnable() {
-                public void run() {
-                    int fixed = PrimerStore.repairNumberedPairs(hit.group);
-                    if (fixed > 0) {
-                        JOptionPane.showMessageDialog(null,
-                                "已重建 " + fixed + " 对编号配对（同编号 F↔R 单边，其余旧边已清除）。\n"
-                                + "单侧编号（单引物设计）与非 P 编号命名（手动多重 PCR）未改动。");
-                    } else {
-                        JOptionPane.showMessageDialog(null, "未发现需要修复的编号配对（或本组无 P编号_F/_R 命名）。");
-                    }
-                }
-            }));
-            // v8：颜色一行 12 常用色，点击即换该引物颜色
-            JPanel colorRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
-            colorRow.setOpaque(false);
-            colorRow.add(new JLabel("颜色:"));
+            opsMenu.addSeparator();
+            // v8：12 常用色（v0.1.70：原为占两行的色块面板，折叠成子菜单）
             final String[][] PALETTE = {
                     {"红", "E53935"}, {"橙", "FB8C00"}, {"黄", "FDD835"}, {"绿", "43A047"},
                     {"青", "00ACC1"}, {"蓝", "1E88E5"}, {"紫", "8E24AA"}, {"品红", "D81B60"},
                     {"棕", "795548"}, {"灰", "757575"}, {"黑", "37474F"}, {"粉", "F48FB1"}
             };
+            JMenu colorMenu = new JMenu("颜色 ▸");
             for (final String[] c : PALETTE) {
-                JButton b = new JButton();
-                b.setPreferredSize(new Dimension(16, 16));
-                b.setBackground(new Color(Integer.parseInt(c[1], 16)));
-                b.setToolTipText(c[0]);
-                b.setMargin(new Insets(0, 0, 0, 0));
-                b.setContentAreaFilled(true);
-                b.setBorderPainted(false);
-                b.setOpaque(true);
-                b.addActionListener(new ActionListener() {
+                JMenuItem mi = new JMenuItem(c[0], new ColorChip(Integer.parseInt(c[1], 16)));
+                mi.addActionListener(new ActionListener() {
                     public void actionPerformed(ActionEvent e) {
                         hit.color = c[1];
                         PrimerStore.refresh();
                     }
                 });
-                colorRow.add(b);
+                colorMenu.add(mi);
             }
-            JButton auto = new JButton("默认");
-            auto.setFont(auto.getFont().deriveFont(9f));
-            auto.setMargin(new Insets(0, 2, 0, 2));
-            auto.setToolTipText("恢复按链默认色（绿=+/蓝=-）");
-            auto.addActionListener(new ActionListener() {
+            JMenuItem defColor = new JMenuItem("默认（按链：绿=+ / 蓝=-）");
+            defColor.addActionListener(new ActionListener() {
                 public void actionPerformed(ActionEvent e) {
                     hit.color = null;
                     PrimerStore.refresh();
                 }
             });
-            colorRow.add(auto);
-            menu.add(colorRow);
+            colorMenu.add(defColor);
+            opsMenu.add(colorMenu);
+            menu.add(opsMenu);
         }
 
+        // v0.1.70：设置类 4 项折叠为一个子菜单（显示序列 + 布局 + 阈值 + 自动保存）
+        JMenu setMenu = new JMenu("设置 ▸");
         // v8：显示碱基序列开关（全局）
         JCheckBoxMenuItem seqItem = new JCheckBoxMenuItem("显示序列", PrimerStore.showSeq);
         seqItem.addActionListener(new ActionListener() {
@@ -1160,16 +1192,25 @@ public class PrimerTrack extends AbstractTrack {
                 PrimerStore.refresh();
             }
         });
-        menu.add(seqItem);
-
+        setMenu.add(seqItem);
+        // v0.1.70：多对引物自动分行开关（老板："多对引物位于同一行，很难看，需要手动调整"）
+        JCheckBoxMenuItem rowItem = new JCheckBoxMenuItem("每对引物独占一行（多对自动分行）", PrimerStore.onePairPerRow);
+        rowItem.setToolTipText("<html>开：每个配对组独占一行，多对引物一眼分清（引物很多时轨会变高）；<br>"
+                + "关：不重叠的引物紧凑共行（旧行为，轨更矮）。</html>");
+        rowItem.addActionListener(new ActionListener() {
+            public void actionPerformed(ActionEvent e) {
+                PrimerStore.onePairPerRow = rowItem.isSelected();
+                PrimerStore.refresh();
+            }
+        });
+        setMenu.add(rowItem);
         // v0.1.15：失败判定阈值设置入口
-        menu.add(item("设置失败判定阈值...", new Runnable() {
+        setMenu.add(item("设置失败判定阈值...", new Runnable() {
             public void run() {
                 showFailConfigDialog();
             }
         }));
-
-        // v9：自动保存开关 + 恢复（IGV session 不保存插件轨，用它兜底防丢失）
+        // v9：自动保存开关（IGV session 不保存插件轨，用它兜底防丢失）
         final JCheckBoxMenuItem asItem = new JCheckBoxMenuItem("自动保存引物（防丢失）", PrimerStore.autosaveEnabled);
         asItem.setToolTipText("每次改动自动写到 ~/.igv_primer_autosave.bed");
         asItem.addActionListener(new ActionListener() {
@@ -1177,15 +1218,8 @@ public class PrimerTrack extends AbstractTrack {
                 PrimerStore.setAutosave(asItem.isSelected());
             }
         });
-        menu.add(asItem);
-        menu.add(item("恢复上次编辑（自动保存）", new Runnable() {
-            public void run() {
-                int n = ExportUtils.restoreAutosave();
-                JOptionPane.showMessageDialog(null, n > 0
-                        ? "已从自动保存恢复 " + n + " 条引物（配对/颜色/测序长度完整还原，可继续编辑）"
-                        : "没有可恢复的自动保存文件（" + ExportUtils.autosaveFile().getAbsolutePath() + "）");
-            }
-        }));
+        setMenu.add(asItem);
+        menu.add(setMenu);
 
         // v0.1.8 批量操作子菜单
         JMenu batchMenu = new JMenu("批量操作");
@@ -1248,79 +1282,93 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(batchMenu);
 
         menu.addSeparator();
-        // v0.1.61：primer3 设计引物——成对 / 仅F向(+) / 仅R向(-)。
-        // v0.1.65：Shift+拖动=纯选区（视图不动，淡色区域显示，**无需进入编辑模式**）；
-        // 有选区 → 对话框自动填充产物区间+上下游(左右100~200bp，限屏幕)；
-        // 无选区 → 产物=当前视图子集(左右留边距)，上下游=两侧100~200bp。菜单动态显示选区状态。
-        JMenuItem selHint = new JMenuItem("Shift+拖动（或普通拖动）选区域 → 右键自动填充产物区间+上下游区");
-        selHint.setEnabled(false);
-        menu.add(selHint);
+        // v0.1.61：鼠标选区状态（移到 primer3 设计子菜单里，顶层不再单独占一行提示）
         String[] selNow = PrimerEditTool.currentSelection();
         try {   // 选区已平移出当前染色体 → 视为无选区
             String curChr = e.getFrame().getChrName();
             if (selNow != null && curChr != null && !selNow[0].equals(curChr)) selNow = null;
         } catch (Throwable ignore) {}
         final String selTag = selNow != null
-                ? "（选区 " + selNow[0] + ":" + (Integer.parseInt(selNow[1]) + 1) + "-" + (Integer.parseInt(selNow[2]) + 1) + " → 填产物+上下游）"
-                : "（无选区 → 当前视图）";
-        menu.add(item("primer3 设计成对引物..." + selTag, new Runnable() {
+                ? "（选区 " + (Integer.parseInt(selNow[1]) + 1) + "-" + (Integer.parseInt(selNow[2]) + 1)
+                + " → 填产物+上下游）"
+                : "（无选区 → 按当前视图）";
+        // v0.1.70：primer3 设计 4 项（含选区提示）折叠为一个子菜单——原占 5 行顶层，
+        // 且与导出/文件/保存类混在一起；同类项收拢后菜单体积小一半。
+        JMenu p3Menu = new JMenu("primer3 设计 ▸" + (selNow != null ? "（有选区）" : "（无选区→视图）"));
+        JMenuItem selHint = new JMenuItem("Shift+拖动（或普通拖动）选区域 → 右键自动填充产物区间+上下游区");
+        selHint.setEnabled(false);
+        p3Menu.add(selHint);
+        p3Menu.addSeparator();
+        p3Menu.add(item("设计成对引物..." + selTag, new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_PAIR); }
         }));
-        menu.add(item("primer3 设计F向单引物(+)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
+        p3Menu.add(item("设计F向单引物(+)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT); }
         }));
-        menu.add(item("primer3 设计R向单引物(-)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
+        p3Menu.add(item("设计R向单引物(-)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT); }
         }));
         // v0.1.69：无选区/懒得选区时的兜底——无视选区，按当前视口中心取 100bp 设计
-        menu.add(item("⚡ 快速设计：视口中心取引物（无视选区，0 对自动降级重试）", new Runnable() {
+        p3Menu.add(item("⚡ 快速设计：视口中心取引物（0 对自动降级重试）", new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, true); }
         }));
-        // v0.1.54：直接回写来源文件（导入的 BED 即源）；未关联文件时走另存为
+        menu.add(p3Menu);
+
+        // v0.1.70：导出 6 项（本轨 3 + 全部 3）折叠为一个子菜单
+        JMenu expMenu = new JMenu("导出 ▸");
+        expMenu.add(item("本轨 BED（方向+颜色+测序长度）", new Runnable() {
+            public void run() { ExportUtils.exportBED(PrimerTrack.this.group); }
+        }));
+        expMenu.add(item("本轨引物序列 FASTA（按方向）", new Runnable() {
+            public void run() { ExportUtils.exportPrimerFasta(PrimerTrack.this.group); }
+        }));
+        expMenu.add(item("本轨测序读段 FASTA（含测序长度区域）", new Runnable() {
+            public void run() { ExportUtils.exportReadFasta(PrimerTrack.this.group); }
+        }));
+        expMenu.addSeparator();
+        expMenu.add(item("全部 BED", new Runnable() {
+            public void run() { ExportUtils.exportBED(null); }
+        }));
+        expMenu.add(item("全部引物序列 FASTA（按方向）", new Runnable() {
+            public void run() { ExportUtils.exportPrimerFasta(null); }
+        }));
+        expMenu.add(item("全部测序读段 FASTA（含测序长度区域）", new Runnable() {
+            public void run() { ExportUtils.exportReadFasta(null); }
+        }));
+        menu.add(expMenu);
+
+        // v0.1.70：文件类（保存/另存/导入/恢复/清空/关闭）折叠为一个子菜单
+        JMenu fileMenu = new JMenu("文件 ▸");
         final String srcTip = (sourceFile == null) ? "（未关联文件 → 将弹另存为）" : ("（" + sourceFile.getName() + "）");
-        menu.add(item("保存本轨" + (isDirty() ? " ●有改动" : "") + " " + srcTip, new Runnable() {
+        fileMenu.add(item("保存本轨" + (isDirty() ? " ●有改动" : "") + " " + srcTip, new Runnable() {
             public void run() { ExportUtils.saveTrack(PrimerTrack.this); }
         }));
-        menu.add(item("本轨另存为...", new Runnable() {
+        fileMenu.add(item("本轨另存为...", new Runnable() {
             public void run() { ExportUtils.saveTrackAs(PrimerTrack.this); }
         }));
-        menu.add(item("导出本轨 BED（方向+颜色+测序长度）", new Runnable() {
+        fileMenu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
+            public void run() { ExportUtils.importBED(); }
+        }));
+        fileMenu.add(item("恢复上次编辑（自动保存）", new Runnable() {
             public void run() {
-                ExportUtils.exportBED(PrimerTrack.this.group);   // 仅导出本轨分组
+                int n = ExportUtils.restoreAutosave();
+                JOptionPane.showMessageDialog(null, n > 0
+                        ? "已从自动保存恢复 " + n + " 条引物（配对/颜色/测序长度完整还原，可继续编辑）"
+                        : "没有可恢复的自动保存文件（" + ExportUtils.autosaveFile().getAbsolutePath() + "）");
             }
         }));
-        menu.add(item("导出本轨引物序列 FASTA（按方向）", new Runnable() {
+        fileMenu.addSeparator();
+        fileMenu.add(item("清空本轨引物", new Runnable() {
             public void run() {
-                ExportUtils.exportPrimerFasta(PrimerTrack.this.group);   // 仅导出本轨分组
+                int n = PrimerStore.countGroup(PrimerTrack.this.group);
+                if (n == 0) { JOptionPane.showMessageDialog(null, "本轨没有引物。"); return; }
+                int r = JOptionPane.showConfirmDialog(null,
+                        "确认删除本轨「" + groupLabel() + "」的全部 " + n + " 条引物？",
+                        "清空本轨引物", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+                if (r == JOptionPane.YES_OPTION) PrimerStore.removeGroup(PrimerTrack.this.group);
             }
         }));
-        menu.add(item("导出本轨测序读段 FASTA（含测序长度区域）", new Runnable() {
-            public void run() {
-                ExportUtils.exportReadFasta(PrimerTrack.this.group);   // 仅导出本轨分组
-            }
-        }));
-        menu.addSeparator();
-        menu.add(item("导出全部 BED", new Runnable() {
-            public void run() {
-                ExportUtils.exportBED(null);   // 全部引物
-            }
-        }));
-        menu.add(item("导出全部引物序列 FASTA（按方向）", new Runnable() {
-            public void run() {
-                ExportUtils.exportPrimerFasta(null);
-            }
-        }));
-        menu.add(item("导出全部测序读段 FASTA（含测序长度区域）", new Runnable() {
-            public void run() {
-                ExportUtils.exportReadFasta(null);
-            }
-        }));
-        menu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
-            public void run() {
-                ExportUtils.importBED();
-            }
-        }));
-        menu.add(item("关闭本轨（删除该来源引物）", new Runnable() {
+        fileMenu.add(item("关闭本轨（删除该来源引物）", new Runnable() {
             public void run() {
                 int n = PrimerStore.countGroup(PrimerTrack.this.group);
                 int r = JOptionPane.showConfirmDialog(null,
@@ -1332,20 +1380,11 @@ public class PrimerTrack extends AbstractTrack {
                 }
             }
         }));
+        menu.add(fileMenu);
         menu.addSeparator();
         menu.add(item("重算全部参数", new Runnable() {
             public void run() {
                 PrimerStore.refreshAll();
-            }
-        }));
-        menu.add(item("清空本轨引物", new Runnable() {
-            public void run() {
-                int n = PrimerStore.countGroup(PrimerTrack.this.group);
-                if (n == 0) { JOptionPane.showMessageDialog(null, "本轨没有引物。"); return; }
-                int r = JOptionPane.showConfirmDialog(null,
-                        "确认删除本轨「" + groupLabel() + "」的全部 " + n + " 条引物？",
-                        "清空本轨引物", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-                if (r == JOptionPane.YES_OPTION) PrimerStore.removeGroup(PrimerTrack.this.group);
             }
         }));
         menu.add(item("清空全部轨道引物", new Runnable() {
@@ -1375,12 +1414,52 @@ public class PrimerTrack extends AbstractTrack {
      * 命中信息（二聚体等指标）较多时单个 JMenuItem 文本极长会把整张菜单撑成大片白板。
      * 此处覆写 getPreferredSize 把宽度封顶为 MENU_MAX_W，与 IGV 原生右键菜单宽度一致。
      */
+    /** v0.1.70：颜色子菜单用的小色块图标（12×12，带描边）。 */
+    private static class ColorChip implements Icon {
+        private final Color c;
+
+        ColorChip(int rgb) { this.c = new Color(rgb); }
+
+        public void paintIcon(Component cmp, Graphics g, int x, int y) {
+            g.setColor(c);
+            g.fillRect(x, y, 12, 12);
+            g.setColor(new Color(0, 0, 0, 70));
+            g.drawRect(x, y, 11, 11);
+        }
+
+        public int getIconWidth() { return 14; }
+
+        public int getIconHeight() { return 12; }
+    }
+
     private static class BoundedPopupMenu extends IGVPopupMenu {
         @Override
         public Dimension getPreferredSize() {
             Dimension d = super.getPreferredSize();
             if (d.width > MENU_MAX_W) d = new Dimension(MENU_MAX_W, d.height);
             return d;
+        }
+
+        /**
+         * v0.1.70：默认菜单出现在点击点右下 → 正好压住刚框选的区域/点击的引物
+         * （老板："选择区域后，区域上点击右键，右键菜单位于选择区域下面，不好看。
+         * 右键菜单设计放到选择范围上面，不被遮挡"）。
+         * 显示前先按 preferredSize 预排：菜单底边贴到点击点上方 6px；
+         * 上方空间不够（会露出屏幕顶部）时交回原位（JPopupMenu 自带越界翻转）。
+         */
+        @Override
+        public void show(Component invoker, int x, int y) {
+            try {
+                int h = getPreferredSize().height;
+                java.awt.Point inv = invoker.getLocationOnScreen();
+                int upScreen = inv.y + y - h - 6;
+                if (h > 0 && upScreen >= 4) {
+                    super.show(invoker, x, upScreen - inv.y);   // 转回 invoker 相对坐标
+                    return;
+                }
+            } catch (Throwable ignore) {
+            }
+            super.show(invoker, x, y);
         }
     }
 

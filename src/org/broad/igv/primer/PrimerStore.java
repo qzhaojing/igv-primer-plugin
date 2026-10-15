@@ -29,6 +29,8 @@ public class PrimerStore {
 
     // 右键菜单"显示序列"开关：选中后在引物下方画碱基序列
     public static boolean showSeq = false;
+    /** v0.1.70：每个配对组独占一行（多对引物不再挤同一行）；关=紧凑共行（旧行为）。 */
+    public static boolean onePairPerRow = true;
     public static boolean autosaveEnabled = true;   // 自动保存引物到 ~/.igv_primer_autosave.bed（防丢失）
 
     // 默认设计参数（由添加对话框记忆；R1/R2 默认 0，可在对话框手动改并"保存配置"持久化）
