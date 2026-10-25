@@ -34,6 +34,17 @@ import java.util.List;
  * 每次导出时按「启用条目 + 应用方向（F / R / 双向）」自动拼接到 5′ 端，并在 FASTA
  * header 写入 <code>|tail=&lt;名称&gt;</code> 以便回溯。
  *
+ * <h3>v0.1.72：三级作用域（解决「R1/R2 接头不同、每条酶切位点不同」）</h3>
+ * <ol>
+ *   <li><b>逐条覆盖</b>：引物自带 tailSeq（自定义序列）或 tailName（库条目名，
+ *       <code>"-"</code> = 明确不加）。命中即生效，且<b>不再受条目 apply 方向限制</b>
+ *       ——用户显式指定优先于条目的隐含方向。</li>
+ *   <li><b>方向默认</b>：defaultF（+ 链引物）/ defaultR（- 链引物），可各设一个条目，
+ *       解决 R1/R2 接头不同、F/R 尾巴不同的场景。</li>
+ *   <li><b>统一默认</b>：active（旧版字段），F/R 同用一个条目；仅当方向默认未设时生效。</li>
+ * </ol>
+ * 优先级：逐条 &gt; 方向默认 &gt; 统一默认。
+ *
  * <p>纯数据类，不依赖 AWT，可 headless 单测。
  */
 public class TailLibrary {
@@ -66,11 +77,18 @@ public class TailLibrary {
     public static final String APPLY_F = "F";
     public static final String APPLY_R = "R";
 
+    /** v0.1.72：逐条设置里「明确不附加」的标记（存 Primer.tailName），用于覆盖全局默认。 */
+    public static final String NONE = "-";
+    /** v0.1.72：逐条设置里「继承全局/方向默认」的显示名（实际存 null）。 */
+    public static final String INHERIT = null;
+
     /** 分类候选（管理对话框下拉用）。 */
     public static final String[] TYPES = {"酶切位点", "接头", "通用引物", "标签", "同源臂", "自定义"};
 
     private static final List<Tail> entries = new ArrayList<Tail>();
-    private static String active = null;      // 当前启用的条目名；null/""/"关" = 不附加
+    private static String active = null;      // 统一默认条目名；null/""/"关" = 不附加（旧版字段，兼容保留）
+    private static String defaultF = null;    // v0.1.72：F 向（+ 链引物）方向默认条目名；null=未设（回落 active）
+    private static String defaultR = null;    // v0.1.72：R 向（- 链引物）方向默认条目名
     private static File currentFile = null;   // 当前库文件路径（保存到 / 另存为 用）
 
     // ---------- 文件 ----------
@@ -114,6 +132,8 @@ public class TailLibrary {
         entries.clear();
         if (list != null) entries.addAll(list);
         if (active != null && get(active) == null) active = null;   // 启用项被删则自动关闭
+        if (defaultF != null && get(defaultF) == null) defaultF = null;
+        if (defaultR != null && get(defaultR) == null) defaultR = null;
     }
 
     public static synchronized void add(Tail t) {
@@ -126,6 +146,8 @@ public class TailLibrary {
         if (t == null) return false;
         entries.remove(t);
         if (name.equals(active)) active = null;
+        if (name.equals(defaultF)) defaultF = null;
+        if (name.equals(defaultR)) defaultR = null;
         return true;
     }
 
@@ -149,7 +171,13 @@ public class TailLibrary {
         return (active == null || active.isEmpty()) ? null : active;
     }
 
+    /**
+     * v0.1.72：设为「统一默认」（F / R 同用一个条目）会自动清掉方向默认，
+     * 否则方向默认会一直盖住统一设置，界面上看起来「改了没生效」。
+     */
     public static synchronized void setActive(String name) {
+        defaultF = null;
+        defaultR = null;
         if (name == null || name.isEmpty() || "关".equals(name)) { active = null; return; }
         if (get(name) == null) { active = null; return; }
         active = name;
@@ -159,28 +187,126 @@ public class TailLibrary {
         return activeName() != null && get(activeName()) != null;
     }
 
+    /** v0.1.72：任一方向当前实际会附加（含方向默认）。工具条高亮用。 */
+    public static synchronized boolean anyEnabled() {
+        return !seqFor('+').isEmpty() || !seqFor('-').isEmpty();
+    }
+
     public static synchronized Tail activeEntry() {
         return enabled() ? get(activeName()) : null;
     }
 
+    // ---------- v0.1.72 方向默认（F / R 可不同）----------
+
+    /** F/R 是否已分开设置（任一方向默认非空即算分开）。 */
+    public static synchronized boolean split() {
+        return defaultF != null || defaultR != null;
+    }
+
+    /** 某方向的方向默认条目名（未设返回 null）。 */
+    public static synchronized String defaultName(char strand) {
+        return strand == '+' ? defaultF : defaultR;
+    }
+
+    /** 设某方向的方向默认；name 为空 / "关" / 库中不存在 → 视为不设（回落统一默认）。 */
+    public static synchronized void setDefault(char strand, String name) {
+        String v = null;
+        if (name != null && !name.isEmpty() && !"关".equals(name) && get(name) != null) v = name;
+        if (strand == '+') defaultF = v; else defaultR = v;
+    }
+
     /**
-     * 导出时实际拼到 5′ 端的序列。
+     * 某方向「当前生效的默认条目名」：方向默认 &gt; 统一默认。
+     */
+    public static synchronized String effectiveDefaultName(char strand) {
+        String d = defaultName(strand);
+        if (d != null) return get(d) == null ? null : d;
+        return activeName();
+    }
+
+    /** 全局设置的一句话摘要（导出提示 / 工具条 tooltip 用），如 "F:EcoRI / R:XhoI" 或 "统一:EcoRI"。 */
+    public static synchronized String summaryLine() {
+        if (split()) {
+            String f = effectiveDefaultName('+');
+            String r = effectiveDefaultName('-');
+            return "F:" + (f == null ? "无" : f) + " / R:" + (r == null ? "无" : r);
+        }
+        String n = activeName();
+        return n == null ? "无" : ("统一:" + n);
+    }
+
+    // ---------- 解析 ----------
+
+    /**
+     * 导出时实际拼到 5′ 端的序列（按方向默认 / 统一默认）。
      *
      * @param strand '+' = F 向（正向引物），'-' = R 向；按条目 apply 过滤。
      * @return 附加序列（大写）；未启用 / 方向不匹配 / 空序列时返回空串。
      */
     public static synchronized String seqFor(char strand) {
-        Tail t = activeEntry();
+        String nm = effectiveDefaultName(strand);
+        Tail t = nm == null ? null : get(nm);
         if (t == null || t.seq == null || t.seq.isEmpty()) return "";
         if (APPLY_F.equals(t.apply) && strand != '+') return "";
         if (APPLY_R.equals(t.apply) && strand != '-') return "";
         return t.seq;
     }
 
-    /** 给一段序列拼 5′ 附加（未启用则原样返回）。 */
+    /** 给一段序列拼 5′ 附加（按方向默认；未启用则原样返回）。 */
     public static String apply(String seq, char strand) {
         if (seq == null) return "";
         String t = seqFor(strand);
+        return t.isEmpty() ? seq : t + seq;
+    }
+
+    // ---------- v0.1.72 逐条覆盖 ----------
+
+    /**
+     * 某条引物最终生效的 5′ 附加序列。
+     * 优先级：本条自定义序列 &gt; 本条指定库条目（不看 apply 方向）&gt; 方向默认 &gt; 统一默认。
+     * 本条 tailName 为 {@link #NONE} 时明确不附加（连全局默认一起挡掉）。
+     */
+    public static synchronized String seqFor(Primer p) {
+        if (p == null) return "";
+        if (p.tailSeq != null && !p.tailSeq.isEmpty()) return sanitize(p.tailSeq);
+        String nm = p.tailName == null ? null : p.tailName.trim();
+        if (nm != null && !nm.isEmpty()) {
+            if (NONE.equals(nm)) return "";
+            Tail t = get(nm);
+            if (t != null && t.seq != null) return t.seq;   // 显式指定 → 不再按 apply 过滤方向
+        }
+        return seqFor(p.strand);
+    }
+
+    /** 某条引物附加来源的名称（写 FASTA header / 界面显示用）；无附加返回 null。 */
+    public static synchronized String nameFor(Primer p) {
+        if (p == null) return null;
+        if (p.tailSeq != null && !p.tailSeq.isEmpty()) return "自定义:" + sanitize(p.tailSeq);
+        String nm = p.tailName == null ? null : p.tailName.trim();
+        if (nm != null && !nm.isEmpty()) {
+            if (NONE.equals(nm)) return null;
+            if (get(nm) != null) return nm;
+        }
+        return seqFor(p.strand).isEmpty() ? null : effectiveDefaultName(p.strand);
+    }
+
+    /** 附加来源说明：本条 / 本条自定义 / 方向默认(F|R) / 全局 / 无。 */
+    public static synchronized String scopeFor(Primer p) {
+        if (p == null) return "无";
+        if (p.tailSeq != null && !p.tailSeq.isEmpty()) return "本条自定义";
+        String nm = p.tailName == null ? null : p.tailName.trim();
+        if (nm != null && !nm.isEmpty()) {
+            if (NONE.equals(nm)) return "本条不加";
+            if (get(nm) != null) return "本条";
+        }
+        if (seqFor(p.strand).isEmpty()) return "无";
+        return defaultName(p.strand) != null ? ("方向默认" + (p.strand == '+' ? "(F)" : "(R)")) : "全局";
+    }
+
+    /** 给某条引物的序列拼 5′ 附加（含逐条覆盖）。 */
+    public static String apply(String seq, Primer p) {
+        if (seq == null) return "";
+        String t = seqFor(p);
         return t.isEmpty() ? seq : t + seq;
     }
 
@@ -207,6 +333,8 @@ public class TailLibrary {
     public static synchronized void loadDefaults() {
         entries.clear();
         active = null;
+        defaultF = null;
+        defaultR = null;
         // —— 酶切位点（纯位点；实际使用时建议在 5′ 端再补 2–6 个保护碱基）——
         add(new Tail("EcoRI", "GAATTC", "酶切位点", APPLY_BOTH, "G^AATTC；建议前置保护碱基 GC/C"));
         add(new Tail("BamHI", "GGATCC", "酶切位点", APPLY_BOTH, "G^GATCC；建议前置保护碱基 CGC"));
@@ -260,6 +388,8 @@ public class TailLibrary {
             Element root = doc.createElement("tailLibrary");
             root.setAttribute("version", "1");
             root.setAttribute("active", active == null ? "" : active);
+            root.setAttribute("defaultF", defaultF == null ? "" : defaultF);
+            root.setAttribute("defaultR", defaultR == null ? "" : defaultR);
             doc.appendChild(root);
             for (Tail t : entries) {
                 Element e = doc.createElement("tail");
@@ -335,6 +465,11 @@ public class TailLibrary {
                 if (active.trim().isEmpty() || get(active) == null) active = null;
             }
             currentFile = f;
+            // v0.1.72：方向默认（缺省=未设；库中已无此名则回落统一默认）
+            String df = root.getAttribute("defaultF");
+            String dr = root.getAttribute("defaultR");
+            defaultF = (df == null || df.trim().isEmpty() || get(df) == null) ? null : df;
+            defaultR = (dr == null || dr.trim().isEmpty() || get(dr) == null) ? null : dr;
             return true;
         } catch (Exception ex) {
             return false;

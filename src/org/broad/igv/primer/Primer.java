@@ -24,6 +24,10 @@ public class Primer {
     public String seq;       // 实际引物序列 5'->3'（反向链引物=正链区间序列的反向互补，写入时即转好；随编辑自动更新）
     public String color;     // 自定义颜色（hex RRGGBB，null=按链默认色；右键色块设置）
     public Integer rowOverride; // 手动指定行号（上下拖动设置；null=自动布局）
+    // v0.1.72：5′ 附加（酶切位点/接头/标签…）逐条覆盖。tailSeq 优先于 tailName；
+    // tailName = "-" 表示「本条明确不附加」（连全局默认一起挡掉）；两者都空 = 继承方向/全局默认。
+    public String tailName;
+    public String tailSeq;
 
     // 实时计算指标
     public double tm = Double.NaN;
@@ -76,7 +80,7 @@ public class Primer {
         return chr + ":" + (start + 1) + "-" + end;
     }
 
-    /** BED name 字段：名字|role|readNN[|g分组][|a配对组ID][|c颜色][|r行号] */
+    /** BED name 字段：名字|role|readNN[|g分组][|a配对组ID][|c颜色][|t附加名][|x自定义附加序列][|r行号] */
     public String bedName() {
         return bedName(null);
     }
@@ -87,7 +91,20 @@ public class Primer {
                 + (group == null ? "" : "|g" + group)
                 + (pairedWith.isEmpty() ? "" : "|p" + String.join(";", pairedWith))
                 + (color == null ? "" : "|c" + color)
+                + tailBedSegs()
                 + (pinRow == null ? "" : "|r" + pinRow);
+    }
+
+    /** v0.1.72：5′ 附加的两个标记段（|t 条目名 / |x 自定义序列）；缺省为空串。 */
+    public String tailBedSegs() {
+        StringBuilder sb = new StringBuilder();
+        if (tailName != null && !tailName.isEmpty()) {
+            sb.append("|t").append(tailName.replace("|", "_"));
+        }
+        if (tailSeq != null && !tailSeq.isEmpty()) {
+            sb.append("|x").append(TailLibrary.sanitize(tailSeq));
+        }
+        return sb.toString();
     }
 
     public String colorHex() {
@@ -123,6 +140,8 @@ public class Primer {
         p.pairedWith = new java.util.LinkedHashSet<String>(pairedWith);
         p.color = color;
         p.rowOverride = rowOverride;
+        p.tailName = tailName;
+        p.tailSeq = tailSeq;
         p.seq = seq;
         p.tm = tm;
         p.gc = gc;

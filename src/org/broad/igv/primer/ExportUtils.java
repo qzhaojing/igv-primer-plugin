@@ -192,14 +192,14 @@ public class ExportUtils {
     public static void exportPrimerFasta() { exportPrimerFasta(null); }
 
     /**
-     * v0.1.71：5′ 附加序列（Tail）标记段——启用且该方向适用时写 |tail=&lt;名称&gt;，
-     * 便于回溯这批引物导出时带了什么（酶切位点/接头/标签…）。未启用返回空串。
+     * v0.1.71：5′ 附加序列（Tail）标记段——该引物实际附加时写 |tail=&lt;名称&gt;，
+     * 便于回溯这批引物导出时带了什么（酶切位点/接头/标签…）。未附加返回空串。
+     * v0.1.72：改为按「逐条 &gt; 方向默认 &gt; 统一默认」解析后的实际结果。
      */
     private static String tailTag(Primer p) {
-        String t = TailLibrary.seqFor(p.strand);
-        if (t.isEmpty()) return "";
-        String nm = TailLibrary.activeName();
-        return "|tail=" + (nm == null ? "" : nm);
+        String nm = TailLibrary.nameFor(p);
+        if (nm == null || nm.isEmpty()) return "";
+        return "|tail=" + nm;
     }
 
     /** 导出引物序列 FASTA（group==null 导出全部；否则仅导出该分组=单独导出一轨）。 */
@@ -217,10 +217,14 @@ public class ExportUtils {
             java.util.Map<Primer, Integer> rows = null;
             try { rows = PrimerTrack.allScreenRows(); } catch (Throwable ignore) { }
             int tailed = 0;
+            int customCnt = 0;   // v0.1.72：逐条单独设置了 5′ 附加的条数
             for (Primer p : list) {
                 // v0.1.71：5′ 附加序列（酶切位点/接头/标签…）拼到引物 5′ 端
-                String seq = TailLibrary.apply(primerSeq(p), p.strand);
-                if (seq.length() > (p.seq == null ? 0 : p.seq.length())) tailed++;
+                // v0.1.72：按三级作用域解析（逐条覆盖 &gt; 方向默认 &gt; 统一默认）
+                String seq = TailLibrary.apply(primerSeq(p), p);
+                if (!TailLibrary.seqFor(p).isEmpty()) tailed++;
+                if ((p.tailSeq != null && !p.tailSeq.isEmpty())
+                        || (p.tailName != null && !p.tailName.isEmpty())) customCnt++;
                 Integer row = (rows != null && rows.containsKey(p)) ? rows.get(p) : p.rowOverride;
                 w.write(fastaHeader(p, row) + tailTag(p));
                 w.newLine();
@@ -233,8 +237,9 @@ public class ExportUtils {
             w.close();
             JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath()
                     + (group == null ? "" : "（来源：" + group + "）")
-                    + (tailed > 0 ? "\n其中 " + tailed + " 条已在 5′ 端附加「" + TailLibrary.activeName()
-                    + "」（" + TailLibrary.seqFor('+') + "…），header 记录 |tail。" : "")
+                    + (tailed > 0 ? "\n其中 " + tailed + " 条已在 5′ 端附加序列（" + TailLibrary.summaryLine()
+                    + (customCnt > 0 ? "；" + customCnt + " 条为本条单独设置" : "")
+                    + "），header 记录 |tail。" : "")
                     + "\n（header 内含坐标/分组/配对/布局行，可直接再用「导入」还原成图）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
@@ -274,7 +279,8 @@ public class ExportUtils {
                 String fwd = b == null ? "" : new String(b).toUpperCase();
                 String read = p.strand == '+' ? fwd : PrimerMetrics.revComp(fwd);
                 // v0.1.71：测序读段 5′ 端同样附加（接头类序列本来就落在读段最外侧）
-                read = TailLibrary.apply(read, p.strand);
+                // v0.1.72：同样走三级作用域（逐条 / 方向 / 统一）
+                read = TailLibrary.apply(read, p);
                 w.write(">" + p.name + "|" + p.role + "|read" + p.readLen + "|" + p.chr + ":" + (s + 1) + "-" + e
                         + "|" + (p.strand == '+' ? "F" : "R") + tailTag(p));
                 w.newLine();
@@ -414,6 +420,8 @@ public class ExportUtils {
             String color = null;
             int row = -1;       // v0.1.6：|r行号 → rowOverride（布局定死恢复）；-1 = 自动布局
             String aId = null;
+            String tailName = null;   // v0.1.72：|t 本条 5′ 附加条目名
+            String tailSeq = null;    // v0.1.72：|x 本条自定义 5′ 附加序列
             java.util.List<String> partners = new java.util.ArrayList<String>();  // v0.1.46：先收集，引物入列后再写 pairedWith
             if (name.indexOf('|') > 0) {
                 String[] parts = name.split("\\|");
@@ -441,6 +449,12 @@ public class ExportUtils {
                         }
                     } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
                         try { row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) {}
+                    } else if (seg.startsWith("t") && seg.length() > 1) {
+                        // v0.1.72：|t本条 5′ 附加条目名（"-" = 明确不附加）
+                        tailName = seg.substring(1);
+                    } else if (seg.startsWith("x") && seg.length() > 1) {
+                        // v0.1.72：|x本条自定义 5′ 附加序列（优先于 |t）
+                        tailSeq = seg.substring(1);
                     }
                 }
                 // 兼容：第 2 段为纯 role（无前缀）时设为角色
@@ -456,6 +470,8 @@ public class ExportUtils {
                     "-".equals(st) ? '-' : '+', role, readLen, null);
             p.group = g;
             p.color = color;
+            p.tailName = tailName;   // v0.1.72：恢复逐条 5′ 附加设置
+            p.tailSeq = tailSeq;
             if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
             out.add(p);
             if (!partners.isEmpty()) {           // v0.1.46：引物已在 out 中，此时才写边
@@ -475,6 +491,7 @@ public class ExportUtils {
     /** FASTA 单条记录的中间态 */
     private static class FastaRec {
         String name, role = "R1", chr = null, color = null, group = null;
+        String tailName = null, tailSeq = null;   // v0.1.72：|t / |x
         int start = -1, end = -1, readLen = 50, row = -1;
         char strand = '+';
         java.util.List<String> partners = new ArrayList<String>();
@@ -541,6 +558,12 @@ public class ExportUtils {
                 rec.color = seg.substring(1);
             } else if (seg.startsWith("r") && seg.length() > 1 && Character.isDigit(seg.charAt(1))) {
                 try { rec.row = Integer.parseInt(seg.substring(1)); } catch (Exception ignore) { }
+            } else if (seg.startsWith("tail=")) {
+                continue;   // v0.1.71 旧格式的附加名标记段，忽略（|t / |x 才是可还原的设置）
+            } else if (seg.startsWith("t") && seg.length() > 1 && !seg.contains("=")) {
+                rec.tailName = seg.substring(1);   // v0.1.72：|t 本条附加条目名
+            } else if (seg.startsWith("x") && seg.length() > 1 && seg.substring(1).matches("(?i)[ACGTN]+")) {
+                rec.tailSeq = seg.substring(1);    // v0.1.72：|x 本条自定义附加序列
             } else if (i == 1 && rec.role == null || (i == 1 && !seg.contains("="))) {
                 rec.role = seg;   // 第 2 段且不像 key=value → 视为角色
             }
@@ -555,6 +578,8 @@ public class ExportUtils {
         Primer p = new Primer(h.name, h.chr, h.start, h.end, h.strand, h.role, h.readLen, null);
         p.group = (h.group != null && !h.group.isEmpty()) ? h.group : group;
         if (h.color != null) p.color = h.color;
+        p.tailName = h.tailName;   // v0.1.72：还原逐条 5′ 附加
+        p.tailSeq = h.tailSeq;
         if (h.row >= 0) p.rowOverride = h.row;
         if (h.seq.length() > 0) p.seq = h.seq.toString();   // 未加载基因组时保住序列（有基因组仍以参考为准）
         out.add(p);

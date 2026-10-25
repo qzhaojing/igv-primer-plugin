@@ -259,12 +259,21 @@ public class PrimerTrack extends AbstractTrack {
         if (!nm.equals(lastName)) { lastName = nm; setName(nm); }
     }
 
-    /** v0.1.71：工具条「5′附加」按钮文案（超长截断，避免按钮过宽）。 */
+    /** v0.1.71：工具条「5′附加」按钮文案（超长截断，避免按钮过宽）。
+     *  v0.1.72：区分统一 / 分开（F:… R:…）两种显示。 */
     private static String tailBtnLabel() {
-        if (!TailLibrary.enabled()) return "关";
+        if (TailLibrary.split()) {
+            String f = TailLibrary.effectiveDefaultName('+');
+            String r = TailLibrary.effectiveDefaultName('-');
+            return "F:" + cut(f, 6) + " R:" + cut(r, 6);
+        }
         String n = TailLibrary.activeName();
-        if (n == null) return "关";
-        return n.length() <= 10 ? n : n.substring(0, 9) + "…";
+        return n == null ? "关" : cut(n, 10);
+    }
+
+    private static String cut(String s, int max) {
+        if (s == null || s.isEmpty()) return "-";
+        return s.length() <= max ? s : s.substring(0, max - 1) + "…";
     }
 
     /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
@@ -292,7 +301,7 @@ public class PrimerTrack extends AbstractTrack {
             boolean on = id.equals("edit") ? inEdit
                     : id.equals("seq") ? PrimerStore.showSeq
                     : id.equals("auto") ? PrimerStore.autosaveEnabled
-                    : id.equals("tail") ? TailLibrary.enabled() : false;
+                    : id.equals("tail") ? TailLibrary.anyEnabled() : false;
             int w = 14 + label.length() * 7;
             out.add(new ToolbarBtn(id, label, on, new Rectangle(x, y, w, h)));
             x += w + 4;
@@ -1190,6 +1199,9 @@ public class PrimerTrack extends AbstractTrack {
             });
             colorMenu.add(defColor);
             opsMenu.add(colorMenu);
+            // v0.1.72：单条引物可单独指定 5′ 附加（酶切位点/接头常常条条不同）
+            opsMenu.addSeparator();
+            opsMenu.add(tailOneMenu(hit));
             menu.add(opsMenu);
         }
 
@@ -1230,9 +1242,15 @@ public class PrimerTrack extends AbstractTrack {
             }
         });
         setMenu.add(asItem);
-        // v0.1.71：5′ 附加序列库（酶切位点/接头/标签/同源臂，导出 FASTA 时拼 5′ 端）
-        setMenu.add(item("5′ 附加序列（Tail）库..." + (TailLibrary.enabled()
-                ? "（当前：" + TailLibrary.activeName() + "）" : "（当前：关）"), new Runnable() {
+        // v0.1.72：5′ 附加设置——全局（统一 / F、R 分开）+ 逐条覆盖（R1/R2 接头、各条酶切位点不同）
+        setMenu.add(item("5′ 附加设置（全局 + 逐条）...（当前：" + TailLibrary.summaryLine() + "）", new Runnable() {
+            public void run() {
+                TailSetupDialog.open();
+                PrimerStore.refresh();
+            }
+        }));
+        // v0.1.71：序列库本身的增删改 / XML 存取
+        setMenu.add(item("5′ 附加序列库（增删改）...（共 " + TailLibrary.entries().size() + " 条）", new Runnable() {
             public void run() {
                 TailManagerDialog.open();
                 PrimerStore.refresh();
@@ -1416,6 +1434,56 @@ public class PrimerTrack extends AbstractTrack {
         }));
         menu.addSeparator();
         return menu;
+    }
+
+    /**
+     * v0.1.72：单条引物的 5′ 附加子菜单。逐条设置优先级最高，覆盖「方向默认 / 统一默认」；
+     * 显式指定条目时不再受条目自带 apply 方向限制（用户点名要它，就给）。
+     */
+    private static JMenu tailOneMenu(final Primer hit) {
+        TailLibrary.init();
+        JMenu m = new JMenu("本条 5′ 附加 ▸");
+        String own = (hit.tailSeq != null && !hit.tailSeq.isEmpty())
+                ? ("自定义(" + hit.tailSeq.length() + "nt)")
+                : (hit.tailName == null || hit.tailName.isEmpty()) ? "继承"
+                : (TailLibrary.NONE.equals(hit.tailName) ? "不附加" : hit.tailName);
+        String eff = TailLibrary.seqFor(hit);
+        JMenuItem info = new JMenuItem("本条：" + own + "　生效：" + (eff.isEmpty() ? "无" : eff.length() + "nt"));
+        info.setEnabled(false);
+        m.add(info);
+        m.add(item("继承全局/方向默认", new Runnable() {
+            public void run() { TailSetupDialog.setOne(hit, null, null); }
+        }));
+        m.add(item("本条不附加（覆盖全局）", new Runnable() {
+            public void run() { TailSetupDialog.setOne(hit, TailLibrary.NONE, null); }
+        }));
+        m.add(item("自定义序列...", new Runnable() {
+            public void run() {
+                String in = JOptionPane.showInputDialog(null,
+                        "为该引物 5′ 端附加的序列（5′→3′）：", "自定义 5′ 附加", JOptionPane.PLAIN_MESSAGE);
+                if (in == null) return;
+                String sq = TailLibrary.sanitize(in);
+                if (sq.isEmpty()) { JOptionPane.showMessageDialog(null, "序列为空，未修改。"); return; }
+                TailSetupDialog.setOne(hit, null, sq);
+            }
+        }));
+        m.addSeparator();
+        java.util.LinkedHashMap<String, JMenu> groups = new java.util.LinkedHashMap<String, JMenu>();
+        for (TailLibrary.Tail t : TailLibrary.entries()) {
+            JMenu g = groups.get(t.type);
+            if (g == null) { g = new JMenu(t.type + " ▸"); groups.put(t.type, g); }
+            final String nm = t.name;
+            g.add(item(nm + "  [" + shortSeq12(t.seq) + "]", new Runnable() {
+                public void run() { TailSetupDialog.setOne(hit, nm, null); }
+            }));
+        }
+        for (java.util.Map.Entry<String, JMenu> e : groups.entrySet()) m.add(e.getValue());
+        return m;
+    }
+
+    private static String shortSeq12(String s) {
+        if (s == null) return "";
+        return s.length() <= 12 ? s : s.substring(0, 10) + "…";
     }
 
     private static JMenuItem item(String text, final Runnable r) {
@@ -1611,8 +1679,8 @@ public class PrimerTrack extends AbstractTrack {
                         "格式错误", JOptionPane.ERROR_MESSAGE);
             }
         } else if ("tail".equals(id)) {
-            // v0.1.71：打开 5′ 附加序列库（XML 可保存/加载/修改再保存），关闭后重绘以更新按钮文案
-            TailManagerDialog.open();
+            // v0.1.72：打开 5′ 附加设置（全局 F/R + 逐条覆盖），关闭后重绘以更新按钮文案
+            TailSetupDialog.open();
             PrimerStore.refresh();
         } else if ("setFail".equals(id)) {
             try {
