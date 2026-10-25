@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PrimerPlugin implements IGVPlugin {
 
     /** 插件版本号：显示在引物轨工具条最右侧（开发期对版用）。改功能时同步 +1。 */
-    public static final String VERSION = "v0.1.70";
+    public static final String VERSION = "v0.1.71";
 
     private static boolean inited = false;
     private static final Set<PrimerTrack> knownTracks = new LinkedHashSet<PrimerTrack>();
@@ -56,6 +56,8 @@ public class PrimerPlugin implements IGVPlugin {
             try { PrimerEditTool.ensureShiftSelectors(); } catch (Throwable ignore) { }
             // v0.1.68：常驻快捷键（Del 删 / N 新建 / E 编辑 / F 翻转 / V 定位 / Esc 取消 / Ctrl+配对）
             try { PrimerEditTool.ensureShortcutKeys(); } catch (Throwable ignore) { }
+            // v0.1.71：5′ 附加序列库（~/.igv_primer_tails.xml，首次自动落内置预置）
+            try { TailLibrary.init(); } catch (Throwable ignore) { }
         } catch (Throwable e) {
             org.apache.log4j.Logger.getLogger(PrimerPlugin.class).error("PrimerPlugin init failed", e);
         }

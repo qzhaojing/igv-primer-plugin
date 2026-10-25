@@ -191,6 +191,17 @@ public class ExportUtils {
 
     public static void exportPrimerFasta() { exportPrimerFasta(null); }
 
+    /**
+     * v0.1.71：5′ 附加序列（Tail）标记段——启用且该方向适用时写 |tail=&lt;名称&gt;，
+     * 便于回溯这批引物导出时带了什么（酶切位点/接头/标签…）。未启用返回空串。
+     */
+    private static String tailTag(Primer p) {
+        String t = TailLibrary.seqFor(p.strand);
+        if (t.isEmpty()) return "";
+        String nm = TailLibrary.activeName();
+        return "|tail=" + (nm == null ? "" : nm);
+    }
+
     /** 导出引物序列 FASTA（group==null 导出全部；否则仅导出该分组=单独导出一轨）。 */
     public static void exportPrimerFasta(String group) {
         String def = (group == null) ? "primers.fasta" : stripExt(group) + ".primers.fasta";
@@ -205,10 +216,13 @@ public class ExportUtils {
             int n = 0;
             java.util.Map<Primer, Integer> rows = null;
             try { rows = PrimerTrack.allScreenRows(); } catch (Throwable ignore) { }
+            int tailed = 0;
             for (Primer p : list) {
-                String seq = primerSeq(p);
+                // v0.1.71：5′ 附加序列（酶切位点/接头/标签…）拼到引物 5′ 端
+                String seq = TailLibrary.apply(primerSeq(p), p.strand);
+                if (seq.length() > (p.seq == null ? 0 : p.seq.length())) tailed++;
                 Integer row = (rows != null && rows.containsKey(p)) ? rows.get(p) : p.rowOverride;
-                w.write(fastaHeader(p, row));
+                w.write(fastaHeader(p, row) + tailTag(p));
                 w.newLine();
                 for (int i = 0; i < seq.length(); i += 60) {
                     w.write(seq.substring(i, Math.min(seq.length(), i + 60)));
@@ -219,6 +233,8 @@ public class ExportUtils {
             w.close();
             JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物序列到: " + f.getAbsolutePath()
                     + (group == null ? "" : "（来源：" + group + "）")
+                    + (tailed > 0 ? "\n其中 " + tailed + " 条已在 5′ 端附加「" + TailLibrary.activeName()
+                    + "」（" + TailLibrary.seqFor('+') + "…），header 记录 |tail。" : "")
                     + "\n（header 内含坐标/分组/配对/布局行，可直接再用「导入」还原成图）");
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
@@ -257,8 +273,10 @@ public class ExportUtils {
                 byte[] b = g.getSequence(p.chr, s, e);
                 String fwd = b == null ? "" : new String(b).toUpperCase();
                 String read = p.strand == '+' ? fwd : PrimerMetrics.revComp(fwd);
+                // v0.1.71：测序读段 5′ 端同样附加（接头类序列本来就落在读段最外侧）
+                read = TailLibrary.apply(read, p.strand);
                 w.write(">" + p.name + "|" + p.role + "|read" + p.readLen + "|" + p.chr + ":" + (s + 1) + "-" + e
-                        + "|" + (p.strand == '+' ? "F" : "R"));
+                        + "|" + (p.strand == '+' ? "F" : "R") + tailTag(p));
                 w.newLine();
                 for (int i = 0; i < read.length(); i += 60) {
                     w.write(read.substring(i, Math.min(read.length(), i + 60)));

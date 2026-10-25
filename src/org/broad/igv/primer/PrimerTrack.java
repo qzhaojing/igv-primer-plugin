@@ -259,6 +259,14 @@ public class PrimerTrack extends AbstractTrack {
         if (!nm.equals(lastName)) { lastName = nm; setName(nm); }
     }
 
+    /** v0.1.71：工具条「5′附加」按钮文案（超长截断，避免按钮过宽）。 */
+    private static String tailBtnLabel() {
+        if (!TailLibrary.enabled()) return "关";
+        String n = TailLibrary.activeName();
+        if (n == null) return "关";
+        return n.length() <= 10 ? n : n.substring(0, 9) + "…";
+    }
+
     /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
     private java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
         java.util.List<ToolbarBtn> out = new java.util.ArrayList<ToolbarBtn>();
@@ -276,12 +284,15 @@ public class PrimerTrack extends AbstractTrack {
         defs.put("save", "保存" + (isDirty() ? " *" : ""));   // v0.1.54：回写源文件；无来源文件时等同另存为
         defs.put("saveas", "另存为");
         defs.put("close", "关闭");
+        // v0.1.71：5′ 附加序列（Tail / Add-on）——酶切位点 / 接头 / 标签 / 同源臂，导出 FASTA 时拼 5′ 端
+        defs.put("tail", "5′附加:" + tailBtnLabel());
         for (java.util.Map.Entry<String, String> e : defs.entrySet()) {
             String id = e.getKey();
             String label = e.getValue();
             boolean on = id.equals("edit") ? inEdit
                     : id.equals("seq") ? PrimerStore.showSeq
-                    : id.equals("auto") ? PrimerStore.autosaveEnabled : false;
+                    : id.equals("auto") ? PrimerStore.autosaveEnabled
+                    : id.equals("tail") ? TailLibrary.enabled() : false;
             int w = 14 + label.length() * 7;
             out.add(new ToolbarBtn(id, label, on, new Rectangle(x, y, w, h)));
             x += w + 4;
@@ -1219,6 +1230,14 @@ public class PrimerTrack extends AbstractTrack {
             }
         });
         setMenu.add(asItem);
+        // v0.1.71：5′ 附加序列库（酶切位点/接头/标签/同源臂，导出 FASTA 时拼 5′ 端）
+        setMenu.add(item("5′ 附加序列（Tail）库..." + (TailLibrary.enabled()
+                ? "（当前：" + TailLibrary.activeName() + "）" : "（当前：关）"), new Runnable() {
+            public void run() {
+                TailManagerDialog.open();
+                PrimerStore.refresh();
+            }
+        }));
         menu.add(setMenu);
 
         // v0.1.8 批量操作子菜单
@@ -1591,6 +1610,10 @@ public class PrimerTrack extends AbstractTrack {
                 JOptionPane.showMessageDialog(null, "测序长度输入格式错误：" + ex.getMessage(),
                         "格式错误", JOptionPane.ERROR_MESSAGE);
             }
+        } else if ("tail".equals(id)) {
+            // v0.1.71：打开 5′ 附加序列库（XML 可保存/加载/修改再保存），关闭后重绘以更新按钮文案
+            TailManagerDialog.open();
+            PrimerStore.refresh();
         } else if ("setFail".equals(id)) {
             try {
                 PrimerStore.failGcMin = parseDblField("gcMin", PrimerStore.failGcMin);
