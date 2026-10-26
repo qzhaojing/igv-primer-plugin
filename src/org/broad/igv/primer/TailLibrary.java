@@ -82,8 +82,12 @@ public class TailLibrary {
     /** v0.1.72：逐条设置里「继承全局/方向默认」的显示名（实际存 null）。 */
     public static final String INHERIT = null;
 
-    /** 分类候选（管理对话框下拉用）。 */
-    public static final String[] TYPES = {"酶切位点", "接头", "通用引物", "标签", "同源臂", "自定义"};
+    /** 分类候选（管理对话框下拉用）。v0.1.76：支持用 "/" 分级，如「接头/二代接头」。 */
+    public static final String[] TYPES = {"酶切位点", "接头/二代接头", "接头/三代接头", "通用引物", "标签",
+            "同源臂", "自定义"};
+
+    /** v0.1.76：用户自建类别（存 XML，可长久保留；与内置类别合并展示）。 */
+    private static final List<String> extraCats = new ArrayList<String>();
 
     private static final List<Tail> entries = new ArrayList<Tail>();
     private static String active = null;      // 统一默认条目名；null/""/"关" = 不附加（旧版字段，兼容保留）
@@ -102,6 +106,102 @@ public class TailLibrary {
     /** 槽位显示名（预览 / header 来源标注用）。 */
     public static final String[] SLOT_NAMES = {"F端", "R端", "R1端", "R2端"};
     private static File currentFile = null;   // 当前库文件路径（保存到 / 另存为 用）
+
+    // ---------- v0.1.76 类别（可自建，持久化）----------
+
+    /** 全部类别：内置 + 用户自建（去重保序）。 */
+    public static synchronized List<String> categories() {
+        List<String> out = new ArrayList<String>();
+        for (String c : TYPES) if (!out.contains(c)) out.add(c);
+        for (String c : extraCats) if (c != null && !c.trim().isEmpty() && !out.contains(c)) out.add(c);
+        // 条目里用到的类别也算（兼容旧库 / 手改 XML）
+        for (Tail t : entries) {
+            if (t != null && t.type != null && !t.type.trim().isEmpty() && !out.contains(t.type)) out.add(t.type);
+        }
+        return out;
+    }
+
+    /** 新增自建类别（空 / 已存在返回 false）。 */
+    public static synchronized boolean addCategory(String c) {
+        if (c == null) return false;
+        String v = c.trim();
+        if (v.isEmpty() || categories().contains(v)) return false;
+        extraCats.add(v);
+        return true;
+    }
+
+    /**
+     * 删除自建类别（内置类别删不掉）。同时把该类别及其子类下的条目 type 降级为「自定义」，
+     * 不删条目本身——只清分类，避免误删老板攒的序列。
+     *
+     * @return 被改类型的条目数（-1 = 拒绝删除）
+     */
+    public static synchronized int removeCategory(String c) {
+        if (c == null) return -1;
+        if (!extraCats.contains(c)) return -1;
+        extraCats.remove(c);
+        int n = 0;
+        for (Tail t : entries) {
+            if (t != null && inCategory(t.type, c)) { t.type = "自定义"; n++; }
+        }
+        return n;
+    }
+
+    /** 重命名类别（内置也能改）：把该类别及子类下条目的 type 前缀一起改。 */
+    public static synchronized int renameCategory(String oldC, String newC) {
+        if (oldC == null || newC == null) return -1;
+        String nv = newC.trim();
+        if (nv.isEmpty() || oldC.equals(nv)) return -1;
+        int n = 0;
+        for (Tail t : entries) {
+            if (t == null || t.type == null) continue;
+            if (t.type.equals(oldC)) { t.type = nv; n++; }
+            else if (t.type.startsWith(oldC + "/")) { t.type = nv + t.type.substring(oldC.length()); n++; }
+        }
+        int i = extraCats.indexOf(oldC);
+        if (i >= 0) extraCats.set(i, nv);
+        else if (categories().indexOf(nv) < 0) extraCats.add(nv);
+        return n;
+    }
+
+    /** type 是否属于某类别（含子类）。 */
+    public static boolean inCategory(String type, String cat) {
+        if (type == null || cat == null) return false;
+        return type.equals(cat) || type.startsWith(cat + "/");
+    }
+
+    /** 分类路径按 "/" 切分（用于树形展示）。 */
+    public static String[] pathOf(String type) {
+        String t = (type == null || type.trim().isEmpty()) ? "自定义" : type.trim();
+        return t.split("/");
+    }
+
+    /**
+     * v0.1.76：加载旧库后，把平铺的「接头」按名称启发式归到二代 / 三代子类，
+     * 认不出的进「接头/其它」。（不删条目，只改分类。）
+     */
+    private static void migrateLegacyCategory() {
+        for (Tail t : entries) {
+            if (t == null || !"接头".equals(t.type)) continue;
+            String n = t.name == null ? "" : t.name.toLowerCase();
+            if (n.contains("illumina") || n.contains("miseq") || n.contains("nextseq")
+                    || n.contains("novaseq") || n.contains("hiseq") || n.contains("i5")
+                    || n.contains("i7") || n.contains("bgi") || n.contains("mgiseq")) {
+                t.type = "接头/二代接头";
+            } else if (n.contains("pacbio") || n.contains("nanopore") || n.contains("minion")
+                    || n.contains("promethion") || n.contains("ont")) {
+                t.type = "接头/三代接头";
+            } else {
+                t.type = "接头/其它";
+            }
+        }
+    }
+
+    /** 分类的最后一段（叶子显示名）。 */
+    public static String leafOf(String type) {
+        String[] p = pathOf(type);
+        return p[p.length - 1];
+    }
 
     // ---------- 文件 ----------
 
@@ -410,6 +510,7 @@ public class TailLibrary {
     /** 内置预置库（酶切位点 / 接头 / 通用引物 / 标签 / 同源臂示例）。 */
     public static synchronized void loadDefaults() {
         entries.clear();
+        extraCats.clear();
         active = null;
         defaultF = null;
         defaultR = null;
@@ -439,12 +540,12 @@ public class TailLibrary {
         add(new Tail("SmaI", "CCCGGG", "酶切位点", APPLY_BOTH, "CCC^GGG；平末端，GC 含量高"));
         add(new Tail("ApaI", "GGGCCC", "酶切位点", APPLY_BOTH, "GGGCC^C；3′ 突出端"));
         // —— 建库 / 测序接头（overhang 形式，二轮 PCR 用）——
-        add(new Tail("Illumina P5 overhang", "AATGATACGGCGACCACCGAGATCTACAC", "接头", APPLY_F,
+        add(new Tail("Illumina P5 overhang", "AATGATACGGCGACCACCGAGATCTACAC", "接头/二代接头", APPLY_F,
                 "Illumina 二轮 PCR 正向端（P5 侧）overhang；后面接 i5 index"));
-        add(new Tail("Illumina P7 overhang", "CAAGCAGAAGACGGCATACGAGAT", "接头", APPLY_R,
+        add(new Tail("Illumina P7 overhang", "CAAGCAGAAGACGGCATACGAGAT", "接头/二代接头", APPLY_R,
                 "Illumina 二轮 PCR 反向端（P7 侧）overhang；后面接 i7 index"));
-        add(new Tail("PacBio 通用接头", "GCAGTCGAACATGTAGCTGACTCAGGTCAC", "接头", APPLY_BOTH, "PacBio 建库通用接头示例"));
-        add(new Tail("Nanopore 接头", "TTTCTGTTGGTGCTGATATTGC", "接头", APPLY_BOTH, "ONT 建库接头示例（按需替换）"));
+        add(new Tail("PacBio 通用接头", "GCAGTCGAACATGTAGCTGACTCAGGTCAC", "接头/三代接头", APPLY_BOTH, "PacBio 建库通用接头示例"));
+        add(new Tail("Nanopore 接头", "TTTCTGTTGGTGCTGATATTGC", "接头/三代接头", APPLY_BOTH, "ONT 建库接头示例（按需替换）"));
         // —— 通用引物 / 启动子尾巴 ——
         add(new Tail("M13F(-21)", "TGTAAAACGACGGCCAGT", "通用引物", APPLY_F, "M13 正向通用测序引物"));
         add(new Tail("M13R", "CAGGAAACAGCTATGACC", "通用引物", APPLY_R, "M13 反向通用测序引物"));
@@ -486,6 +587,10 @@ public class TailLibrary {
                 e.appendChild(kid(doc, "note", t.note));
                 root.appendChild(e);
             }
+            // v0.1.76：用户自建类别（空类别也能长久保存）
+            Element cats = doc.createElement("categories");
+            for (String c : extraCats) cats.appendChild(kid(doc, "category", c));
+            root.appendChild(cats);
             Transformer tr = TransformerFactory.newInstance().newTransformer();
             tr.setOutputProperty(OutputKeys.INDENT, "yes");
             tr.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
@@ -546,6 +651,18 @@ public class TailLibrary {
             }
             entries.clear();
             entries.addAll(got);
+            // v0.1.76：自建类别（缺省为空）
+            List<String> cats = new ArrayList<String>();
+            NodeList cn = root.getElementsByTagName("category");
+            for (int i = 0; i < cn.getLength(); i++) {
+                Node n = cn.item(i);
+                if (n == null) continue;
+                String c = n.getTextContent();
+                if (c != null && !c.trim().isEmpty() && !cats.contains(c)) cats.add(c.trim());
+            }
+            extraCats.clear();
+            extraCats.addAll(cats);
+            migrateLegacyCategory();   // v0.1.76：旧库的平铺「接头」→ 二代/三代子类
             active = root.getAttribute("active");
             if (active != null) {
                 if (active.trim().isEmpty() || get(active) == null) active = null;

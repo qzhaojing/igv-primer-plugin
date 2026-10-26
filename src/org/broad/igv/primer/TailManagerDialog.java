@@ -3,13 +3,11 @@ package org.broad.igv.primer;
 import org.broad.igv.ui.IGV;
 
 import javax.swing.BorderFactory;
-import javax.swing.DefaultListModel;
 import javax.swing.JButton;
 import javax.swing.JComboBox;
 import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JLabel;
-import javax.swing.JList;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
@@ -48,8 +46,7 @@ import java.util.List;
  */
 public class TailManagerDialog extends JDialog {
 
-    private final DefaultListModel<String> model = new DefaultListModel<String>();
-    private final JList<String> list = new JList<String>(model);
+    private javax.swing.JTree tree;   // v0.1.76：左侧类别树（替代原平铺列表）
     private final JTextField[] slotF = new JTextField[4];
     private final JTextArea structA = new JTextArea(6, 30);
     private final JLabel stateL = new JLabel(" ");
@@ -83,34 +80,41 @@ public class TailManagerDialog extends JDialog {
 
     private JPanel listPanel() {
         JPanel p = new JPanel(new BorderLayout(4, 4));
-        p.setBorder(BorderFactory.createTitledBorder("附加序列列表（库条目）"));
-        list.setSelectionMode(javax.swing.ListSelectionModel.SINGLE_SELECTION);
-        list.setVisibleRowCount(16);
-        list.addMouseListener(new MouseAdapter() {
+        p.setBorder(BorderFactory.createTitledBorder("本地附加序列库（按类别分级；选中条目后可插入右侧）"));
+        tree = new javax.swing.JTree(new javax.swing.tree.DefaultMutableTreeNode("库"));
+        tree.setRootVisible(false);
+        tree.setShowsRootHandles(true);
+        tree.getSelectionModel().setSelectionMode(javax.swing.tree.TreeSelectionModel.SINGLE_TREE_SELECTION);
+        tree.addMouseListener(new MouseAdapter() {
             @Override
             public void mouseClicked(MouseEvent e) {
                 if (e.getClickCount() == 2) {
                     TailLibrary.Tail t = TailLibrary.get(selectedName());
                     if (t != null) showEntryEditor(t);
+                    else renameCategoryNode();   // 双击类别节点 = 重命名
                 }
             }
         });
-        JScrollPane sp = new JScrollPane(list);
-        sp.setPreferredSize(new Dimension(300, 300));
+        JScrollPane sp = new JScrollPane(tree);
+        sp.setPreferredSize(new Dimension(320, 320));
         p.add(sp, BorderLayout.CENTER);
 
         JPanel btns = new JPanel(new GridLayout(0, 2, 4, 4));
-        btns.add(btn("新增条目...", new Runnable() { public void run() { showEntryEditor(null); } }));
+        btns.add(btn("新建类别...", new Runnable() { public void run() { newCategory(); } }));
+        btns.add(btn("新建条目...", new Runnable() { public void run() { showEntryEditor(null); } }));
         btns.add(btn("编辑...", new Runnable() {
             public void run() {
                 TailLibrary.Tail t = TailLibrary.get(selectedName());
-                if (t == null) { JOptionPane.showMessageDialog(TailManagerDialog.this, "请先在列表中选择条目。"); return; }
+                if (t == null) {
+                    JOptionPane.showMessageDialog(TailManagerDialog.this,
+                            "请先在上方选中一个条目（类别节点请双击重命名）。");
+                    return;
+                }
                 showEntryEditor(t);
             }
         }));
         btns.add(btn("删除", new Runnable() { public void run() { deleteEntry(); } }));
-        btns.add(btn("上移", new Runnable() { public void run() { move(-1); } }));
-        btns.add(btn("下移", new Runnable() { public void run() { move(1); } }));
+        btns.add(btn("重命名类别...", new Runnable() { public void run() { renameCategoryNode(); } }));
         btns.add(btn("设为统一默认", new Runnable() { public void run() { setActive(); } }));
         btns.add(btn("停用统一默认", new Runnable() { public void run() {
             TailLibrary.setActive(null);
@@ -120,6 +124,110 @@ public class TailManagerDialog extends JDialog {
         } }));
         p.add(btns, BorderLayout.SOUTH);
         return p;
+    }
+
+    // ---------- v0.1.76 类别树 ----------
+
+    /** 重建左侧类别树：category[▸sub] → 条目。 */
+    private void rebuildTree() {
+        javax.swing.tree.DefaultMutableTreeNode root = new javax.swing.tree.DefaultMutableTreeNode("库");
+        java.util.LinkedHashMap<String, javax.swing.tree.DefaultMutableTreeNode> nodes =
+                new java.util.LinkedHashMap<String, javax.swing.tree.DefaultMutableTreeNode>();
+        for (String c : TailLibrary.categories()) {
+            String[] path = TailLibrary.pathOf(c);
+            String cur = "";
+            javax.swing.tree.DefaultMutableTreeNode parent = root;
+            for (String seg : path) {
+                cur = cur.isEmpty() ? seg : cur + "/" + seg;
+                javax.swing.tree.DefaultMutableTreeNode n = nodes.get(cur);
+                if (n == null) {
+                    n = new javax.swing.tree.DefaultMutableTreeNode(new CatNode(cur, seg));
+                    nodes.put(cur, n);
+                    parent.add(n);
+                }
+                parent = n;
+            }
+        }
+        // 挂条目
+        for (TailLibrary.Tail t : TailLibrary.entries()) {
+            String[] path = TailLibrary.pathOf(t.type);
+            String cur = "";
+            javax.swing.tree.DefaultMutableTreeNode parent = root;
+            for (String seg : path) {
+                cur = cur.isEmpty() ? seg : cur + "/" + seg;
+                javax.swing.tree.DefaultMutableTreeNode n = nodes.get(cur);
+                if (n == null) {
+                    n = new javax.swing.tree.DefaultMutableTreeNode(new CatNode(cur, seg));
+                    nodes.put(cur, n);
+                    parent.add(n);
+                }
+                parent = n;
+            }
+            parent.add(new javax.swing.tree.DefaultMutableTreeNode(
+                    new ItemNode(t.name, t.name + "  " + shortSeq(t.seq) + "  " + applyLabel(t.apply))));
+        }
+        tree.setModel(new javax.swing.tree.DefaultTreeModel(root));
+        for (int i = 0; i < tree.getRowCount(); i++) tree.expandRow(i);
+    }
+
+    /** 树节点数据：类别 / 条目。 */
+    private static class CatNode {
+        final String path, label;
+        CatNode(String path, String label) { this.path = path; this.label = label; }
+        public String toString() { return label; }
+    }
+
+    private static class ItemNode {
+        final String name, label;
+        ItemNode(String name, String label) { this.name = name; this.label = label; }
+        public String toString() { return label; }
+    }
+
+    private Object selectedNodeObj() {
+        javax.swing.tree.TreePath tp = tree.getSelectionPath();
+        if (tp == null) return null;
+        javax.swing.tree.DefaultMutableTreeNode n =
+                (javax.swing.tree.DefaultMutableTreeNode) tp.getLastPathComponent();
+        return n == null ? null : n.getUserObject();
+    }
+
+    /** 选中的条目名；选中的是类别则返回 null。 */
+    private String selectedName() {
+        Object o = selectedNodeObj();
+        return (o instanceof ItemNode) ? ((ItemNode) o).name : null;
+    }
+
+    private String selectedCategory() {
+        Object o = selectedNodeObj();
+        return (o instanceof CatNode) ? ((CatNode) o).path : null;
+    }
+
+    private void newCategory() {
+        String in = JOptionPane.showInputDialog(this,
+                "新类别名（用 / 分两级，如「接头/三代接头」；留空取消）：", "新建类别", JOptionPane.PLAIN_MESSAGE);
+        if (in == null || in.trim().isEmpty()) return;
+        String c = in.trim();
+        if (TailLibrary.addCategory(c)) {
+            TailLibrary.save();
+            rebuildTree();
+            updateStructure();
+            JOptionPane.showMessageDialog(this, "已新建类别「" + c + "」，并写入库文件（长期保存）。");
+        } else {
+            JOptionPane.showMessageDialog(this, "类别「" + c + "」已存在。");
+        }
+    }
+
+    private void renameCategoryNode() {
+        String c = selectedCategory();
+        if (c == null) { JOptionPane.showMessageDialog(this, "请先在上方选中一个类别节点。"); return; }
+        String in = JOptionPane.showInputDialog(this, "把类别「" + c + "」重命名为：", c);
+        if (in == null || in.trim().isEmpty()) return;
+        int n = TailLibrary.renameCategory(c, in.trim());
+        TailLibrary.save();
+        rebuildTree();
+        updateStructure();
+        JOptionPane.showMessageDialog(this, "已重命名为「" + in.trim() + "」，"
+                + (n > 0 ? "该类别下 " + n + " 条已跟着归类。" : "（该类别下暂无条目）"));
     }
 
     // ---------- 右：四个端槽位 + 结构预览 ----------
@@ -357,14 +465,7 @@ public class TailManagerDialog extends JDialog {
     // ---------- 库条目（列表 + 弹出编辑器） ----------
 
     private void reload() {
-        model.clear();
-        List<TailLibrary.Tail> es = TailLibrary.entries();
-        for (TailLibrary.Tail t : es) {
-            model.addElement(t.name + "  [" + t.type + "]  " + shortSeq(t.seq)
-                    + "  " + applyLabel(t.apply));
-        }
-        String act = TailLibrary.activeName();
-        if (act != null) list.setSelectedValue(act, true);
+        rebuildTree();
     }
 
     private static String shortSeq(String s) {
@@ -378,23 +479,23 @@ public class TailManagerDialog extends JDialog {
         return "双向";
     }
 
-    private String selectedName() {
-        String v = list.getSelectedValue();
-        if (v == null) return null;
-        int i = v.indexOf("  [");
-        return i > 0 ? v.substring(0, i) : v;
-    }
-
     /** 新增 / 编辑条目的弹出小表单；init=null 为新增。保存成功返回 true。 */
     private boolean showEntryEditor(final TailLibrary.Tail init) {
         final JTextField nameF2 = new JTextField(init == null ? "" : init.name, 16);
-        final JComboBox<String> typeBox2 = new JComboBox<String>(TailLibrary.TYPES);
+        // v0.1.76：分类下拉取全部类别（含自建），可手输；新增时预填当前选中的类别
+        java.util.List<String> cats = TailLibrary.categories();
+        final JComboBox<String> typeBox2 = new JComboBox<String>(cats.toArray(new String[0]));
         final JTextArea seqA2 = new JTextArea(3, 22);
         final JComboBox<String> applyBox2 = new JComboBox<String>(
                 new String[]{"双向（F+R）", "仅 F 向（+）", "仅 R 向（-）"});
         final JTextField noteF2 = new JTextField(18);
         if (init != null) {
             typeBox2.setSelectedItem(init.type);
+        } else {
+            String pre = selectedCategory();   // 选中类别节点时新建 → 直接归到该类别
+            typeBox2.setSelectedItem(pre != null ? pre : "自定义");
+        }
+        if (init != null) {
             seqA2.setText(init.seq);
             applyBox2.setSelectedIndex(TailLibrary.APPLY_F.equals(init.apply) ? 1
                     : TailLibrary.APPLY_R.equals(init.apply) ? 2 : 0);
@@ -408,7 +509,10 @@ public class TailManagerDialog extends JDialog {
         form.add(new JLabel("序列（5′→3′）：")); form.add(new JScrollPane(seqA2));
         form.add(new JLabel("应用方向："));     form.add(applyBox2);
         form.add(new JLabel("备注："));         form.add(noteF2);
-        form.setPreferredSize(new Dimension(360, 190));
+        form.add(new JLabel(""));               form.add(new JLabel(
+                "<html><font size='2' color='#555555'>分类可直接输入新名字；用 / 分两级，"
+                        + "如「接头/三代接头」</font></html>"));
+        form.setPreferredSize(new Dimension(380, 200));
 
         String title = (init == null ? "新增" : "编辑") + "附加序列条目";
         while (true) {
@@ -425,6 +529,10 @@ public class TailManagerDialog extends JDialog {
                 continue;
             }
             String tp = String.valueOf(typeBox2.getSelectedItem());
+            if (tp != null) tp = tp.trim();
+            if (tp == null || tp.isEmpty()) tp = "自定义";
+            // 手输了新类别 → 自动进库（长久保存）
+            if (TailLibrary.categories().indexOf(tp) < 0) TailLibrary.addCategory(tp);
             String ap = applyBox2.getSelectedIndex() == 1 ? TailLibrary.APPLY_F
                     : applyBox2.getSelectedIndex() == 2 ? TailLibrary.APPLY_R : TailLibrary.APPLY_BOTH;
             TailLibrary.Tail t = new TailLibrary.Tail(nm, sq, tp, ap, noteF2.getText().trim());
@@ -440,32 +548,42 @@ public class TailManagerDialog extends JDialog {
             }
             TailLibrary.save();
             reload();
-            list.setSelectedValue(nm, true);
             PrimerStore.refresh();
             return true;
         }
     }
 
+    /** 删除：条目节点 → 删条目；类别节点 → 删自建类别（条目不删，降到「自定义」）。 */
     private void deleteEntry() {
         String n = selectedName();
-        if (n == null) { JOptionPane.showMessageDialog(this, "请先在左侧选择条目。"); return; }
-        int r = JOptionPane.showConfirmDialog(this, "删除条目「" + n + "」？", "删除",
+        if (n != null) {
+            int r = JOptionPane.showConfirmDialog(this, "删除条目「" + n + "」？", "删除",
+                    JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (r != JOptionPane.YES_OPTION) return;
+            TailLibrary.remove(n);
+            TailLibrary.save();
+            reload();
+            updateStructure();
+            PrimerStore.refresh();
+            return;
+        }
+        String c = selectedCategory();
+        if (c == null) { JOptionPane.showMessageDialog(this, "请先在上方选中条目或自建类别。"); return; }
+        int moved = -2;
+        String msg = "删除类别「" + c + "」？\n（该类别下的条目不会删除，会移到「自定义」分类）";
+        int r = JOptionPane.showConfirmDialog(this, msg, "删除类别",
                 JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
         if (r != JOptionPane.YES_OPTION) return;
-        TailLibrary.remove(n);
+        moved = TailLibrary.removeCategory(c);
+        if (moved < 0) {
+            JOptionPane.showMessageDialog(this, "内置类别不能删除（可以用「重命名类别」改名）。");
+            return;
+        }
         TailLibrary.save();
         reload();
         updateStructure();
         PrimerStore.refresh();
-    }
-
-    private void move(int d) {
-        String n = selectedName();
-        if (n == null) return;
-        TailLibrary.move(n, d);
-        TailLibrary.save();
-        reload();
-        list.setSelectedValue(n, true);
+        JOptionPane.showMessageDialog(this, "已删除类别「" + c + "」，" + moved + " 条已移到「自定义」。");
     }
 
     private void setActive() {

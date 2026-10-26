@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PrimerPlugin implements IGVPlugin {
 
     /** 插件版本号：显示在引物轨工具条最右侧（开发期对版用）。改功能时同步 +1。 */
-    public static final String VERSION = "v0.1.75";
+    public static final String VERSION = "v0.1.76";
 
     private static boolean inited = false;
     private static final Set<PrimerTrack> knownTracks = new LinkedHashSet<PrimerTrack>();
