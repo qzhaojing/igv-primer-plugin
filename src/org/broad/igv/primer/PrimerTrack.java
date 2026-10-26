@@ -1099,6 +1099,15 @@ public class PrimerTrack extends AbstractTrack {
             }
         }));
 
+        // v0.1.73：复制引物提回菜单第一级（紧跟添加/编辑引物下面）——老板：这个功能很好用，别藏在二级里
+        if (hit != null) {
+            menu.add(item("复制选定引物（下方生成）", new Runnable() {
+                public void run() {
+                    PrimerStore.duplicate(hit);
+                }
+            }));
+        }
+
         if (hit != null) {
             menu.add(item("删除选中引物", new Runnable() {
                 public void run() {
@@ -1128,12 +1137,7 @@ public class PrimerTrack extends AbstractTrack {
         if (hit != null) {
             // v0.1.70：引物专属低频操作收进子菜单（同类项折叠，菜单体积减半）
             JMenu opsMenu = new JMenu("引物操作 ▸");
-            // v0.1.16：复制选定引物——原引物正下方生成同款，名称末位数字+1
-            opsMenu.add(item("复制选定引物（下方生成）", new Runnable() {
-                public void run() {
-                    PrimerStore.duplicate(hit);
-                }
-            }));
+            // v0.1.73：复制引物已提回菜单第一级（紧跟添加/编辑引物），这里不再重复
             // v0.1.18：取消该引物配对——只断开与之相关的连线；同组其余成员间连线（>=2 条时）保留
             opsMenu.add(item("取消该引物配对（仅断开相关连线）", new Runnable() {
                 public void run() {

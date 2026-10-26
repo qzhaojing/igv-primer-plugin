@@ -89,6 +89,18 @@ public class TailLibrary {
     private static String active = null;      // 统一默认条目名；null/""/"关" = 不附加（旧版字段，兼容保留）
     private static String defaultF = null;    // v0.1.72：F 向（+ 链引物）方向默认条目名；null=未设（回落 active）
     private static String defaultR = null;    // v0.1.72：R 向（- 链引物）方向默认条目名
+    // v0.1.73：四个「端槽位」——直接存序列（管理对话框右侧文本框），优先于库条目默认。
+    // R1/R2 按 role 匹配（建库场景：read1/read2 两端接头不同），F/R 按 strand 匹配（克隆场景）。
+    // R1 通常对应 F 向引物、R2 对应 R 向；两类都填时 R1/R2 更具体、优先。
+    private static String slotF = "";
+    private static String slotR = "";
+    private static String slotR1 = "";
+    private static String slotR2 = "";
+
+    /** 端槽位编号（TailManagerDialog 右侧四个文本框）。 */
+    public static final int SLOT_F = 0, SLOT_R = 1, SLOT_R1 = 2, SLOT_R2 = 3;
+    /** 槽位显示名（预览 / header 来源标注用）。 */
+    public static final String[] SLOT_NAMES = {"F端", "R端", "R1端", "R2端"};
     private static File currentFile = null;   // 当前库文件路径（保存到 / 另存为 用）
 
     // ---------- 文件 ----------
@@ -235,6 +247,60 @@ public class TailLibrary {
         return n == null ? "无" : ("统一:" + n);
     }
 
+    // ---------- v0.1.73 端槽位（直接序列，F / R / R1 / R2）----------
+
+    /** 某端槽位当前序列（未设返回空串）。 */
+    public static synchronized String slotSeq(int slot) {
+        String s = slotField(slot);
+        return s == null ? "" : s;
+    }
+
+    /** 设某端槽位序列（自动净化；null/空 = 清除该槽）。 */
+    public static synchronized void setSlot(int slot, String seq) {
+        String v = sanitize(seq);
+        if (slot == SLOT_F) slotF = v;
+        else if (slot == SLOT_R) slotR = v;
+        else if (slot == SLOT_R1) slotR1 = v;
+        else if (slot == SLOT_R2) slotR2 = v;
+    }
+
+    /** 是否设置了任一端槽位。 */
+    public static synchronized boolean slotAny() {
+        return !slotF.isEmpty() || !slotR.isEmpty() || !slotR1.isEmpty() || !slotR2.isEmpty();
+    }
+
+    /** 按引物 role（R1/R2）匹配的槽序列；不匹配或未设返回空串。 */
+    public static synchronized String slotSeqForRole(String role) {
+        if ("R1".equals(role) && !slotR1.isEmpty()) return slotR1;
+        if ("R2".equals(role) && !slotR2.isEmpty()) return slotR2;
+        return "";
+    }
+
+    /** 按引物 strand（F/R）匹配的槽序列；不匹配或未设返回空串。 */
+    public static synchronized String slotSeqForStrand(char strand) {
+        if (strand == '+' && !slotF.isEmpty()) return slotF;
+        if (strand == '-' && !slotR.isEmpty()) return slotR;
+        return "";
+    }
+
+    /** 某条引物命中的槽位编号（-1 = 未命中任何槽）。R1/R2 优先于 F/R。 */
+    public static synchronized int slotHit(Primer p) {
+        if (p == null) return -1;
+        if ("R1".equals(p.role) && !slotR1.isEmpty()) return SLOT_R1;
+        if ("R2".equals(p.role) && !slotR2.isEmpty()) return SLOT_R2;
+        if (p.strand == '+' && !slotF.isEmpty()) return SLOT_F;
+        if (p.strand == '-' && !slotR.isEmpty()) return SLOT_R;
+        return -1;
+    }
+
+    private static String slotField(int slot) {
+        if (slot == SLOT_F) return slotF;
+        if (slot == SLOT_R) return slotR;
+        if (slot == SLOT_R1) return slotR1;
+        if (slot == SLOT_R2) return slotR2;
+        return "";
+    }
+
     // ---------- 解析 ----------
 
     /**
@@ -263,8 +329,9 @@ public class TailLibrary {
 
     /**
      * 某条引物最终生效的 5′ 附加序列。
-     * 优先级：本条自定义序列 &gt; 本条指定库条目（不看 apply 方向）&gt; 方向默认 &gt; 统一默认。
-     * 本条 tailName 为 {@link #NONE} 时明确不附加（连全局默认一起挡掉）。
+     * 优先级：本条自定义序列 &gt; 本条指定库条目（不看 apply 方向）&gt; R1/R2 端槽 &gt; F/R 端槽
+     * &gt; 方向默认条目 &gt; 统一默认条目。
+     * 本条 tailName 为 {@link #NONE} 时明确不附加（连下面的默认一起挡掉）。
      */
     public static synchronized String seqFor(Primer p) {
         if (p == null) return "";
@@ -275,6 +342,8 @@ public class TailLibrary {
             Tail t = get(nm);
             if (t != null && t.seq != null) return t.seq;   // 显式指定 → 不再按 apply 过滤方向
         }
+        int slot = slotHit(p);
+        if (slot >= 0) return slotSeq(slot);
         return seqFor(p.strand);
     }
 
@@ -287,10 +356,12 @@ public class TailLibrary {
             if (NONE.equals(nm)) return null;
             if (get(nm) != null) return nm;
         }
+        int slot = slotHit(p);
+        if (slot >= 0) return SLOT_NAMES[slot] + ":" + shortSeq8(slotSeq(slot));
         return seqFor(p.strand).isEmpty() ? null : effectiveDefaultName(p.strand);
     }
 
-    /** 附加来源说明：本条 / 本条自定义 / 方向默认(F|R) / 全局 / 无。 */
+    /** 附加来源说明：本条 / 本条自定义 / 端槽(R1端|R2端|F端|R端) / 方向默认(F|R) / 全局 / 无。 */
     public static synchronized String scopeFor(Primer p) {
         if (p == null) return "无";
         if (p.tailSeq != null && !p.tailSeq.isEmpty()) return "本条自定义";
@@ -299,8 +370,15 @@ public class TailLibrary {
             if (NONE.equals(nm)) return "本条不加";
             if (get(nm) != null) return "本条";
         }
+        int slot = slotHit(p);
+        if (slot >= 0) return SLOT_NAMES[slot] + "槽";
         if (seqFor(p.strand).isEmpty()) return "无";
         return defaultName(p.strand) != null ? ("方向默认" + (p.strand == '+' ? "(F)" : "(R)")) : "全局";
+    }
+
+    private static String shortSeq8(String s) {
+        if (s == null) return "";
+        return s.length() <= 8 ? s : s.substring(0, 8) + "…";
     }
 
     /** 给某条引物的序列拼 5′ 附加（含逐条覆盖）。 */
@@ -335,6 +413,10 @@ public class TailLibrary {
         active = null;
         defaultF = null;
         defaultR = null;
+        slotF = "";
+        slotR = "";
+        slotR1 = "";
+        slotR2 = "";
         // —— 酶切位点（纯位点；实际使用时建议在 5′ 端再补 2–6 个保护碱基）——
         add(new Tail("EcoRI", "GAATTC", "酶切位点", APPLY_BOTH, "G^AATTC；建议前置保护碱基 GC/C"));
         add(new Tail("BamHI", "GGATCC", "酶切位点", APPLY_BOTH, "G^GATCC；建议前置保护碱基 CGC"));
@@ -390,6 +472,10 @@ public class TailLibrary {
             root.setAttribute("active", active == null ? "" : active);
             root.setAttribute("defaultF", defaultF == null ? "" : defaultF);
             root.setAttribute("defaultR", defaultR == null ? "" : defaultR);
+            root.setAttribute("slotF", slotF);
+            root.setAttribute("slotR", slotR);
+            root.setAttribute("slotR1", slotR1);
+            root.setAttribute("slotR2", slotR2);
             doc.appendChild(root);
             for (Tail t : entries) {
                 Element e = doc.createElement("tail");
@@ -470,6 +556,11 @@ public class TailLibrary {
             String dr = root.getAttribute("defaultR");
             defaultF = (df == null || df.trim().isEmpty() || get(df) == null) ? null : df;
             defaultR = (dr == null || dr.trim().isEmpty() || get(dr) == null) ? null : dr;
+            // v0.1.73：端槽位序列（缺省=未设）
+            slotF = sanitize(root.getAttribute("slotF"));
+            slotR = sanitize(root.getAttribute("slotR"));
+            slotR1 = sanitize(root.getAttribute("slotR1"));
+            slotR2 = sanitize(root.getAttribute("slotR2"));
             return true;
         } catch (Exception ex) {
             return false;
