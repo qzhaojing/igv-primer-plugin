@@ -1100,10 +1100,15 @@ public class PrimerTrack extends AbstractTrack {
         }));
 
         // v0.1.73：复制引物提回菜单第一级（紧跟添加/编辑引物下面）——老板：这个功能很好用，别藏在二级里
-        if (hit != null) {
-            menu.add(item("复制选定引物（下方生成）", new Runnable() {
+        // v0.1.74：点在空白但此前选中过引物时也能复制（右键经常差几个像素点不中色块）
+        final Primer copySrc = (hit != null) ? hit
+                : ((PrimerStore.selected != null && PrimerStore.getPrimers().contains(PrimerStore.selected))
+                        ? PrimerStore.selected : null);
+        if (copySrc != null) {
+            menu.add(item(hit != null ? "复制选定引物（下方生成）"
+                    : "复制选中引物 " + copySrc.name + "（下方生成）", new Runnable() {
                 public void run() {
-                    PrimerStore.duplicate(hit);
+                    PrimerStore.duplicate(copySrc);
                 }
             }));
         }

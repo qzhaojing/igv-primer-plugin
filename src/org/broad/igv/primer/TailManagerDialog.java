@@ -214,18 +214,38 @@ public class TailManagerDialog extends JDialog {
         JTextField f = slotF[slot];
         String in = f.getText();
         String sq = TailLibrary.sanitize(in);
-        if (in != null && !in.trim().isEmpty() && sq.isEmpty()) {
-            JOptionPane.showMessageDialog(this, "序列里没有有效碱基（只认 A/C/G/T/N 等字母）。");
+        String nm = TailLibrary.SLOT_NAMES[slot];
+        // v0.1.74：空文本框点「添加」不再直接报"已清除"误导——先问一遍；本来就空则只提示
+        if (in == null || in.trim().isEmpty()) {
+            if (TailLibrary.slotSeq(slot).isEmpty()) {
+                JOptionPane.showMessageDialog(this, nm + "当前本来就没有附加序列。\n"
+                        + "设置方法：先在文本框输入序列（5′→3′），再点「添加」。");
+                return;
+            }
+            int r = JOptionPane.showConfirmDialog(this,
+                    "文本框是空的。要清除「" + nm + "」已有的附加序列吗？\n"
+                    + "（设置方法：在文本框输入序列后再点「添加」）",
+                    "清除确认", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+            if (r != JOptionPane.YES_OPTION) return;
+            TailLibrary.setSlot(slot, "");
+            TailLibrary.save();
+            updateStructure();
+            PrimerStore.refresh();
+            JOptionPane.showMessageDialog(this, "已清除" + nm + "附加序列。");
             return;
         }
-        TailLibrary.setSlot(slot, sq);   // 空 = 清除该槽
+        if (sq.isEmpty()) {
+            JOptionPane.showMessageDialog(this,
+                    "输入内容里没有有效碱基（只认 A/C/G/T/N 等字母，数字、空格、\n"
+                    + "全角字符会被清理）。请检查输入法/粘贴内容后重试。");
+            return;
+        }
+        TailLibrary.setSlot(slot, sq);   // 到这里一定是非空设置
         f.setText(sq);
         TailLibrary.save();
         updateStructure();
         PrimerStore.refresh();
-        JOptionPane.showMessageDialog(this, sq.isEmpty()
-                ? "已清除" + TailLibrary.SLOT_NAMES[slot] + "附加序列。"
-                : "已设置" + TailLibrary.SLOT_NAMES[slot] + "附加序列：" + sq
+        JOptionPane.showMessageDialog(this, "已设置" + nm + "附加序列：" + sq
                 + "（" + sq.length() + " nt，已保存到库文件）");
     }
 
