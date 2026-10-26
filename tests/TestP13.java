@@ -95,7 +95,7 @@ public class TestP13 {
         check(p5 != null && "F".equals(p5.apply), "Illumina P5 默认仅 F 向");
         org.broad.igv.primer.TailLibrary.Tail p7 = org.broad.igv.primer.TailLibrary.get("Illumina P7 overhang");
         check(p7 != null && "R".equals(p7.apply), "Illumina P7 默认仅 R 向");
-        check(org.broad.igv.primer.TailLibrary.get("Gibson 同源臂(示例)") != null, "预置含同源臂示例");
+        check(org.broad.igv.primer.TailLibrary.get("Gibson 同源臂(示例占位)") != null, "预置含同源臂示例");
         check(org.broad.igv.primer.TailLibrary.get("His6") != null, "预置含 His6 标签");
         check(!org.broad.igv.primer.TailLibrary.enabled(), "loadDefaults 后处于未启用态");
 

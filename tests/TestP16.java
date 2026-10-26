@@ -31,10 +31,11 @@ public class TestP16 {
         // ---------- 2) 预置条目已按二代/三代归类 ----------
         check("接头/二代接头".equals(org.broad.igv.primer.TailLibrary.get("Illumina P5 overhang").type),
                 "Illumina P5 归到二代接头");
-        check("接头/三代接头".equals(org.broad.igv.primer.TailLibrary.get("PacBio 通用接头").type),
-                "PacBio 归到三代接头");
-        check("接头/三代接头".equals(org.broad.igv.primer.TailLibrary.get("Nanopore 接头").type),
-                "Nanopore 归到三代接头");
+        // v0.1.77：预置三代条目换成官方序列条目（PacBio 通用尾 / ONT 一轮加尾）
+        check("接头/三代接头".equals(org.broad.igv.primer.TailLibrary.get("PacBio 通用尾（正向）").type),
+                "PacBio 通用尾归到三代接头");
+        check("接头/三代接头".equals(org.broad.igv.primer.TailLibrary.get("ONT 一轮加尾（正向）").type),
+                "ONT 加尾归到三代接头");
 
         // ---------- 3) 路径解析 ----------
         String[] p1 = org.broad.igv.primer.TailLibrary.pathOf("接头/二代接头");

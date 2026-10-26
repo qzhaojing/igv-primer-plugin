@@ -539,27 +539,66 @@ public class TailLibrary {
         add(new Tail("EcoRV", "GATATC", "酶切位点", APPLY_BOTH, "GAT^ATC；平末端"));
         add(new Tail("SmaI", "CCCGGG", "酶切位点", APPLY_BOTH, "CCC^GGG；平末端，GC 含量高"));
         add(new Tail("ApaI", "GGGCCC", "酶切位点", APPLY_BOTH, "GGGCC^C；3′ 突出端"));
-        // —— 建库 / 测序接头（overhang 形式，二轮 PCR 用）——
-        add(new Tail("Illumina P5 overhang", "AATGATACGGCGACCACCGAGATCTACAC", "接头/二代接头", APPLY_F,
-                "Illumina 二轮 PCR 正向端（P5 侧）overhang；后面接 i5 index"));
-        add(new Tail("Illumina P7 overhang", "CAAGCAGAAGACGGCATACGAGAT", "接头/二代接头", APPLY_R,
-                "Illumina 二轮 PCR 反向端（P7 侧）overhang；后面接 i7 index"));
-        add(new Tail("PacBio 通用接头", "GCAGTCGAACATGTAGCTGACTCAGGTCAC", "接头/三代接头", APPLY_BOTH, "PacBio 建库通用接头示例"));
-        add(new Tail("Nanopore 接头", "TTTCTGTTGGTGCTGATATTGC", "接头/三代接头", APPLY_BOTH, "ONT 建库接头示例（按需替换）"));
+        // —— 建库 / 测序接头：序列取自厂商官方文件（v0.1.77）——
+        // Illumina：P5 / P7 流动池序列 + Nextera mosaic end（ME）见 Illumina《Adapter Sequences》文档
+        // 与 support.illumina.com "Oligonucleotide Sequences" 页；i5/i7 index 用「Bases in Adapter」
+        // 方向（即合成进引物的实际序列；与 sample sheet 填写方向不同，i7 恰好是它的反向互补）。
+        final String P5 = "AATGATACGGCGACCACCGAGATCTACAC";
+        final String P7 = "CAAGCAGAAGACGGCATACGAGAT";
+        final String ME1 = "TCGTCGGCAGCGTCAGATGTGTATAAGAGACAG";   // Read1 侧 ME = Read1 测序引物
+        final String ME2 = "GTCTCGTGGGCTCGGAGATGTGTATAAGAGACAG";   // Read2 侧 ME = Read2 测序引物
+        add(new Tail("Illumina P5 overhang", P5, "接头/二代接头", APPLY_F,
+                "Illumina 官方：P5 流动池结合序列（二轮 PCR 正向端，后面接 i5 index）"));
+        add(new Tail("Illumina P7 overhang", P7, "接头/二代接头", APPLY_R,
+                "Illumina 官方：P7 流动池结合序列（二轮 PCR 反向端，后面接 i7 index）"));
+        add(new Tail("Nextera i5 全长（无 index）", P5 + ME1, "接头/二代接头", APPLY_F,
+                "P5 + Read1 测序引物（ME 全长，62nt）；单样本/无需 index 时用"));
+        add(new Tail("Nextera i7 全长（无 index）", P7 + ME2, "接头/二代接头", APPLY_R,
+                "P7 + Read2 测序引物（ME 全长，58nt）；单样本/无需 index 时用"));
+        // 带 index 的完整 index 引物（Nextera XT 常用 6+6，序列取自 Illumina Adapter Sequences 文档）
+        String[] i5n = {"S502", "S503", "S505", "S506", "S507", "S508"};
+        String[] i5s = {"CTCTCTAT", "TATCCTCT", "GTAAGGAG", "ACTGCATA", "AAGGAGTA", "CTAAGCCT"};
+        for (int i = 0; i < i5n.length; i++) {
+            add(new Tail("Nextera i5 引物 " + i5n[i], P5 + i5s[i] + ME1, "接头/index(i5)", APPLY_F,
+                    "P5 + i5 index " + i5s[i] + " + ME（70nt）；Illumina Adapter Sequences「Bases in Adapter」方向"));
+        }
+        String[] i7n = {"N701", "N702", "N703", "N704", "N705", "N706"};
+        String[] i7s = {"TCGCCTTA", "CTAGTACG", "TTCTGCCT", "GCTCAGGA", "AGGAGTCC", "CATGCCTA"};
+        for (int i = 0; i < i7n.length; i++) {
+            add(new Tail("Nextera i7 引物 " + i7n[i], P7 + i7s[i] + ME2, "接头/index(i7)", APPLY_R,
+                    "P7 + i7 index " + i7s[i] + " + ME（66nt）；sample sheet 上填的是它的反向互补（如 N701=TAAGGCGA）"));
+        }
+        // —— 三代（PacBio / ONT）——
+        // PacBio：16S 全长扩增方案官方「universal tail」，二轮用 Barcoded Universal Primers（PN 100-466-100）
+        add(new Tail("PacBio 通用尾（正向）", "GCAGTCGAACATGTAGCTGACTCAGGTCAC", "接头/三代接头", APPLY_F,
+                "PacBio 16S 全长扩增官方通用尾（30nt）；一轮 PCR 加在正向引物 5′"));
+        add(new Tail("PacBio 通用尾（反向）", "TGGATCACTTGTGCAAGCATCACATCGTAG", "接头/三代接头", APPLY_R,
+                "PacBio 16S 全长扩增官方通用尾（31nt）；一轮 PCR 加在反向引物 5′"));
+        // ONT：官方 PCR barcoding 协议（SQK-LSK110/LSK114 + EXP-PBC096/PBC001）的「universal tailing sequences」
+        add(new Tail("ONT 一轮加尾（正向）", "TTTCTGTTGGTGCTGATATTGC", "接头/三代接头", APPLY_F,
+                "ONT 官方 PCR barcoding 通用尾（22nt，正向）"));
+        add(new Tail("ONT 一轮加尾（反向）", "ACTTGCCTGTCGCTCTATCTTC", "接头/三代接头", APPLY_R,
+                "ONT 官方 PCR barcoding 通用尾（22nt，反向）"));
         // —— 通用引物 / 启动子尾巴 ——
         add(new Tail("M13F(-21)", "TGTAAAACGACGGCCAGT", "通用引物", APPLY_F, "M13 正向通用测序引物"));
         add(new Tail("M13R", "CAGGAAACAGCTATGACC", "通用引物", APPLY_R, "M13 反向通用测序引物"));
         add(new Tail("T7 promoter", "TAATACGACTCACTATAGGG", "通用引物", APPLY_F, "T7 RNA 聚合酶启动子（体外转录）"));
         add(new Tail("SP6 promoter", "ATTTAGGTGACACTATAG", "通用引物", APPLY_F, "SP6 RNA 聚合酶启动子"));
         add(new Tail("T3 promoter", "AATTAACCCTCACTAAAGGG", "通用引物", APPLY_F, "T3 RNA 聚合酶启动子"));
+        // Illumina 官方寡核苷酸序列（TruSeq 文库测序引物；也可用于 Sanger 验证/测序）
+        add(new Tail("Illumina Read1 测序引物", "ACACTCTTTCCCTACACGACGCTCTTCCGATCT", "通用引物", APPLY_F,
+                "Illumina 官方 Read1 sequencing primer（33nt）"));
+        add(new Tail("Illumina Read2 测序引物", "GTGACTGGAGTTCAGACGTGTGCTCTTCCGATCT", "通用引物", APPLY_R,
+                "Illumina 官方 Read2 sequencing primer（34nt）"));
         // —— 蛋白标签编码序列 ——
         add(new Tail("FLAG", "GACTACAAGGACGACGATGACAAG", "标签", APPLY_BOTH, "FLAG 标签（DYKDDDDK），常加在 C/N 端"));
         add(new Tail("HA", "TACCCATACGATGTTCCAGATTACGCT", "标签", APPLY_BOTH, "HA 标签（YPYDVPDYA）"));
         add(new Tail("His6", "CACCACCACCACCACCAC", "标签", APPLY_BOTH, "6×His 标签（HHHHHH）"));
         add(new Tail("Myc", "GAACAAAAACTCATCTCAGAAGAGGATCTG", "标签", APPLY_BOTH, "Myc 标签（EQKLISEEDL）"));
         // —— 同源臂示例 ——
-        add(new Tail("Gibson 同源臂(示例)", "ACGTACGTACGTACGTACGT", "同源臂", APPLY_BOTH,
-                "示例占位：改成与载体末端同源的 20–30 bp（无缝克隆）"));
+        add(new Tail("Gibson 同源臂(示例占位)", "ACGTACGTACGTACGTACGT", "同源臂", APPLY_BOTH,
+                "占位模板：改成与载体末端同源的 20–30 bp（Gibson / In-Fusion / HiFi 无缝克隆）。"
+                        + "要点：与载体末端完全同源、GC 40–60%、避免与引物 3′ 端互补、同源臂自身不形成发夹"));
     }
 
     // ---------- XML ----------
