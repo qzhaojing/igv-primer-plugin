@@ -1251,15 +1251,11 @@ public class PrimerTrack extends AbstractTrack {
             }
         });
         setMenu.add(asItem);
-        // v0.1.72：5′ 附加设置——全局（统一 / F、R 分开）+ 逐条覆盖（R1/R2 接头、各条酶切位点不同）
-        setMenu.add(item("5′ 附加设置（全局 + 逐条）...（当前：" + TailLibrary.summaryLine() + "）", new Runnable() {
-            public void run() {
-                TailSetupDialog.open();
-                PrimerStore.refresh();
-            }
-        }));
-        // v0.1.71：序列库本身的增删改 / XML 存取
-        setMenu.add(item("5′ 附加序列库（增删改）...（共 " + TailLibrary.entries().size() + " 条）", new Runnable() {
+        // v0.1.78：只留一个入口——序列库管理页（左类别树 + 右四端设置 + 结构预览）。
+        // 原「5′ 附加设置（全局+逐条）」页下线：下拉选条目默认在库里点「设为…默认」即可，
+        // 逐条设置走右键引物菜单，不必再开一个表格页。
+        setMenu.add(item("5′ 附加序列库...（当前：" + TailLibrary.summaryLine()
+                + "，共 " + TailLibrary.entries().size() + " 条）", new Runnable() {
             public void run() {
                 TailManagerDialog.open();
                 PrimerStore.refresh();
@@ -1461,10 +1457,10 @@ public class PrimerTrack extends AbstractTrack {
         info.setEnabled(false);
         m.add(info);
         m.add(item("继承全局/方向默认", new Runnable() {
-            public void run() { TailSetupDialog.setOne(hit, null, null); }
+            public void run() { applyOneTail(hit, null, null); }
         }));
         m.add(item("本条不附加（覆盖全局）", new Runnable() {
-            public void run() { TailSetupDialog.setOne(hit, TailLibrary.NONE, null); }
+            public void run() { applyOneTail(hit, TailLibrary.NONE, null); }
         }));
         m.add(item("自定义序列...", new Runnable() {
             public void run() {
@@ -1473,7 +1469,7 @@ public class PrimerTrack extends AbstractTrack {
                 if (in == null) return;
                 String sq = TailLibrary.sanitize(in);
                 if (sq.isEmpty()) { JOptionPane.showMessageDialog(null, "序列为空，未修改。"); return; }
-                TailSetupDialog.setOne(hit, null, sq);
+                applyOneTail(hit, null, sq);
             }
         }));
         m.addSeparator();
@@ -1483,11 +1479,18 @@ public class PrimerTrack extends AbstractTrack {
             if (g == null) { g = new JMenu(t.type + " ▸"); groups.put(t.type, g); }
             final String nm = t.name;
             g.add(item(nm + "  [" + shortSeq12(t.seq) + "]", new Runnable() {
-                public void run() { TailSetupDialog.setOne(hit, nm, null); }
+                public void run() { applyOneTail(hit, nm, null); }
             }));
         }
         for (java.util.Map.Entry<String, JMenu> e : groups.entrySet()) m.add(e.getValue());
         return m;
+    }
+
+    /** v0.1.78：设置单条引物的 5′ 附加（tailSeq 优先于 tailName；NONE=明确不加）。 */
+    private static void applyOneTail(Primer p, String tailName, String tailSeq) {
+        p.tailName = tailName;
+        p.tailSeq = tailSeq;
+        PrimerStore.refresh();
     }
 
     private static String shortSeq12(String s) {
@@ -1688,8 +1691,9 @@ public class PrimerTrack extends AbstractTrack {
                         "格式错误", JOptionPane.ERROR_MESSAGE);
             }
         } else if ("tail".equals(id)) {
-            // v0.1.72：打开 5′ 附加设置（全局 F/R + 逐条覆盖），关闭后重绘以更新按钮文案
-            TailSetupDialog.open();
+            // v0.1.78：直接打开「5′ 附加序列库」管理页（左类别树 + 右四端设置 + 结构预览），
+            // 原「5′ 附加设置」页已下线（老板：看着也不会用），关闭后重绘以更新按钮文案
+            TailManagerDialog.open();
             PrimerStore.refresh();
         } else if ("setFail".equals(id)) {
             try {

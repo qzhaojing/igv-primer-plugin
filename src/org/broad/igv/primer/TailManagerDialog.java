@@ -116,8 +116,12 @@ public class TailManagerDialog extends JDialog {
         btns.add(btn("删除", new Runnable() { public void run() { deleteEntry(); } }));
         btns.add(btn("重命名类别...", new Runnable() { public void run() { renameCategoryNode(); } }));
         btns.add(btn("设为统一默认", new Runnable() { public void run() { setActive(); } }));
-        btns.add(btn("停用统一默认", new Runnable() { public void run() {
+        btns.add(btn("设为 F 向默认", new Runnable() { public void run() { setDefaultFor('+'); } }));
+        btns.add(btn("设为 R 向默认", new Runnable() { public void run() { setDefaultFor('-'); } }));
+        btns.add(btn("停用库条目默认", new Runnable() { public void run() {
             TailLibrary.setActive(null);
+            TailLibrary.setDefault('+', null);
+            TailLibrary.setDefault('-', null);
             TailLibrary.save();
             refreshState();
             PrimerStore.refresh();
@@ -399,47 +403,34 @@ public class TailManagerDialog extends JDialog {
         JOptionPane.showMessageDialog(this, "已清除" + nm + "附加序列。");
     }
 
-    /** 引物结构预览：每个端显示实际生效的附加（R1/R2 槽优先于 F/R 槽）与示例引物序列。 */
+    /**
+     * 引物结构预览。v0.1.78：不再把库里某条真实引物序列塞进来当示例——老板看到会以为"默认就加了东西"。
+     * 现在只画结构：未设置就明确写「未附加」，引物本体用占位文字，不显示任何默认序列。
+     */
     private void updateStructure() {
         StringBuilder sb = new StringBuilder();
-        String[][] rows = {
-                {"F 端（+ 链引物，role=R1）", "+", "R1"},
-                {"R 端（- 链引物，role=R2）", "-", "R2"}
-        };
-        for (String[] row : rows) {
-            String r1 = TailLibrary.slotSeqForRole(row[2]);
-            String sr = TailLibrary.slotSeqForStrand(row[1].charAt(0));
-            String seq;
-            String src;
-            if (!r1.isEmpty()) { seq = r1; src = "R1".equals(row[2]) ? "R1端槽" : "R2端槽"; }
-            else if (!sr.isEmpty()) { seq = sr; src = row[1].charAt(0) == '+' ? "F端槽" : "R端槽"; }
-            else { seq = ""; src = ""; }
-            String ex = exampleSeq(row[1].charAt(0));
-            sb.append(row[0]).append("：\n    5′- ");
-            if (seq.isEmpty()) {
-                sb.append("（无附加）");
-            } else {
-                sb.append("[").append(seq).append("] (").append(src).append("，").append(seq.length()).append("nt) - ");
-            }
-            sb.append("[").append(ex).append("] (引物) -3′\n");
-        }
-        sb.append("说明：逐条设置（右键引物 / 5′ 附加设置）最优先；R1/R2 端槽优先于 F/R 端槽；");
-        sb.append("都没设时用库条目默认（").append(TailLibrary.summaryLine()).append("）。");
+        sb.append(structLine("F 端（+ 链引物，role=R1）", TailLibrary.SLOT_R1, TailLibrary.SLOT_F, "R1", "F"));
+        sb.append("\n");
+        sb.append(structLine("R 端（- 链引物，role=R2）", TailLibrary.SLOT_R2, TailLibrary.SLOT_R, "R2", "R"));
+        sb.append("\n说明：这里只画结构，不会自动加任何序列；你在上面四个框里填了才会附加。\n");
+        sb.append("优先级：逐条（右键引物） &gt; R1/R2 端 &gt; F/R 端 &gt; 库条目默认（")
+                .append(TailLibrary.summaryLine()).append("）。");
         structA.setText(sb.toString());
         structA.setCaretPosition(0);
         refreshState();
     }
 
-    /** 示例引物序列：取库中该方向第一条有序列的引物；没有就用 20nt 占位。 */
-    private String exampleSeq(char strand) {
-        try {
-            for (Primer p : PrimerStore.getPrimers()) {
-                if (p.strand == strand && p.seq != null && p.seq.length() >= 10) {
-                    return p.seq.length() <= 30 ? p.seq : p.seq.substring(0, 28) + "…";
-                }
-            }
-        } catch (Throwable ignore) { }
-        return "ACGTACGTACGTACGTACGT";
+    /** 单独一端的预览行：命中 role 槽优先，其次 strand 槽；都没设 → 未附加。 */
+    private String structLine(String label, int roleSlot, int strandSlot, String roleName, String strandName) {
+        String s = TailLibrary.slotSeq(roleSlot);
+        String src = roleName + "端";
+        if (s.isEmpty()) {
+            s = TailLibrary.slotSeq(strandSlot);
+            src = strandName + "端";
+        }
+        String head = s.isEmpty() ? "" : "[" + s + "] (" + src + "，" + s.length() + "nt) - ";
+        return label + "：\n    5′- " + head + "[你的引物序列] -3′"
+                + (s.isEmpty() ? "　（未附加，原样导出）" : "");
     }
 
     private void refreshState() {
@@ -584,6 +575,18 @@ public class TailManagerDialog extends JDialog {
         updateStructure();
         PrimerStore.refresh();
         JOptionPane.showMessageDialog(this, "已删除类别「" + c + "」，" + moved + " 条已移到「自定义」。");
+    }
+
+    /** 把选中条目设为某方向的库条目默认（F / R 可不同）。 */
+    private void setDefaultFor(final char strand) {
+        String n = selectedName();
+        if (n == null) { JOptionPane.showMessageDialog(this, "请先在上方选中一条附加序列。"); return; }
+        TailLibrary.setDefault(strand, n);
+        TailLibrary.save();
+        updateStructure();
+        PrimerStore.refresh();
+        JOptionPane.showMessageDialog(this, "已把「" + n + "」设为 " + (strand == '+' ? "F 向（+ 链）" : "R 向（- 链）")
+                + "库条目默认。\n（端槽位与逐条设置仍然优先于它）");
     }
 
     private void setActive() {
