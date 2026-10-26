@@ -126,7 +126,8 @@ public class TailManagerDialog extends JDialog {
 
     private JPanel slotPanel() {
         JPanel p = new JPanel(new GridBagLayout());
-        p.setBorder(BorderFactory.createTitledBorder("端附加序列（直接填序列，点「添加」保存并生效）"));
+        p.setBorder(BorderFactory.createTitledBorder(
+                "端附加序列（左侧列表选中 → 点本行「插入」；确认后点「保存」；清空点「清除」）"));
         GridBagConstraints c = new GridBagConstraints();
         c.insets = new Insets(3, 4, 3, 4);
         c.anchor = GridBagConstraints.WEST;
@@ -146,8 +147,17 @@ public class TailManagerDialog extends JDialog {
             slotF[i] = new JTextField(24);
             p.add(slotF[i], c);
             c.gridx = 2; c.weightx = 0; c.fill = GridBagConstraints.NONE;
-            p.add(btn("添加", new Runnable() {
-                public void run() { applySlot(slot); }
+            // v0.1.75：左列表选中条目 → 点「插入」把序列接到本行文本框末尾（可连续拼保护碱基+位点+接头）
+            p.add(btn("插入", new Runnable() {
+                public void run() { insertSelected(slot); }
+            }), c);
+            c.gridx = 3;
+            p.add(btn("保存", new Runnable() {
+                public void run() { saveSlot(slot); }
+            }), c);
+            c.gridx = 4;
+            p.add(btn("清除", new Runnable() {
+                public void run() { clearSlot(slot); }
             }), c);
         }
 
@@ -210,43 +220,75 @@ public class TailManagerDialog extends JDialog {
         updateStructure();
     }
 
-    private void applySlot(int slot) {
-        JTextField f = slotF[slot];
+    /** 本行文本框（索引 0..3 对应 SLOT_F/R/R1/R2）。 */
+    private JTextField fieldOf(int slot) {
+        int idx = slot == TailLibrary.SLOT_F ? 0 : slot == TailLibrary.SLOT_R ? 1
+                : slot == TailLibrary.SLOT_R1 ? 2 : 3;
+        return slotF[idx];
+    }
+
+    /** 左列表选中条目 → 把其序列接到本行文本框末尾（空则直接放入）。 */
+    private void insertSelected(int slot) {
+        String n = selectedName();
+        if (n == null) {
+            JOptionPane.showMessageDialog(this, "请先在左侧列表里选中一条附加序列。");
+            return;
+        }
+        TailLibrary.Tail t = TailLibrary.get(n);
+        if (t == null || t.seq == null || t.seq.isEmpty()) {
+            JOptionPane.showMessageDialog(this, "选中的条目没有序列。");
+            return;
+        }
+        JTextField f = fieldOf(slot);
+        String cur = TailLibrary.sanitize(f.getText());
+        String merged = cur + t.seq;   // 追加：可连续拼「保护碱基 + 酶切位点 + 接头」
+        f.setText(merged);
+        JOptionPane.showMessageDialog(this, "已把「" + n + "」插入" + TailLibrary.SLOT_NAMES[slot]
+                + "文本框（当前共 " + merged.length() + " nt）。\n确认无误后点本行「保存」。");
+    }
+
+    /** 保存本行：把文本框里的序列写入该端槽位并落盘。空框不做事（清除请用「清除」按钮）。 */
+    private void saveSlot(int slot) {
+        JTextField f = fieldOf(slot);
         String in = f.getText();
         String sq = TailLibrary.sanitize(in);
         String nm = TailLibrary.SLOT_NAMES[slot];
-        // v0.1.74：空文本框点「添加」不再直接报"已清除"误导——先问一遍；本来就空则只提示
         if (in == null || in.trim().isEmpty()) {
-            if (TailLibrary.slotSeq(slot).isEmpty()) {
-                JOptionPane.showMessageDialog(this, nm + "当前本来就没有附加序列。\n"
-                        + "设置方法：先在文本框输入序列（5′→3′），再点「添加」。");
-                return;
-            }
-            int r = JOptionPane.showConfirmDialog(this,
-                    "文本框是空的。要清除「" + nm + "」已有的附加序列吗？\n"
-                    + "（设置方法：在文本框输入序列后再点「添加」）",
-                    "清除确认", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-            if (r != JOptionPane.YES_OPTION) return;
-            TailLibrary.setSlot(slot, "");
-            TailLibrary.save();
-            updateStructure();
-            PrimerStore.refresh();
-            JOptionPane.showMessageDialog(this, "已清除" + nm + "附加序列。");
+            JOptionPane.showMessageDialog(this, "文本框是空的，未保存。\n"
+                    + "设置：输入序列，或左侧列表选中条目后点「插入」；\n"
+                    + "要清空该端请点本行「清除」。", "无法保存", JOptionPane.WARNING_MESSAGE);
             return;
         }
         if (sq.isEmpty()) {
             JOptionPane.showMessageDialog(this,
                     "输入内容里没有有效碱基（只认 A/C/G/T/N 等字母，数字、空格、\n"
-                    + "全角字符会被清理）。请检查输入法/粘贴内容后重试。");
+                    + "全角字符会被清理）。请检查输入法/粘贴内容后重试。",
+                    "无法保存", JOptionPane.WARNING_MESSAGE);
             return;
         }
-        TailLibrary.setSlot(slot, sq);   // 到这里一定是非空设置
+        TailLibrary.setSlot(slot, sq);
         f.setText(sq);
         TailLibrary.save();
         updateStructure();
         PrimerStore.refresh();
-        JOptionPane.showMessageDialog(this, "已设置" + nm + "附加序列：" + sq
-                + "（" + sq.length() + " nt，已保存到库文件）");
+        JOptionPane.showMessageDialog(this, "已保存" + nm + "附加序列：" + sq
+                + "（" + sq.length() + " nt，已写入库文件）");
+    }
+
+    /** 清除本端槽位（意图明确，直接清；清完即保存）。 */
+    private void clearSlot(int slot) {
+        String nm = TailLibrary.SLOT_NAMES[slot];
+        if (TailLibrary.slotSeq(slot).isEmpty() && (fieldOf(slot).getText() == null
+                || fieldOf(slot).getText().trim().isEmpty())) {
+            JOptionPane.showMessageDialog(this, nm + "当前本来就没有附加序列，无需清除。");
+            return;
+        }
+        TailLibrary.setSlot(slot, "");
+        fieldOf(slot).setText("");
+        TailLibrary.save();
+        updateStructure();
+        PrimerStore.refresh();
+        JOptionPane.showMessageDialog(this, "已清除" + nm + "附加序列。");
     }
 
     /** 引物结构预览：每个端显示实际生效的附加（R1/R2 槽优先于 F/R 槽）与示例引物序列。 */
