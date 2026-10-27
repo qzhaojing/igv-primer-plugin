@@ -16,11 +16,10 @@ import java.util.Map;
 /**
  * v0.1.56：primer3 设计引物对话框（设计入口）。
  * v0.1.57：支持三种设计模式——
- *  - 成对（MODE_PAIR）：简单=产物区间（SEQUENCE_TARGET，上下游自动找）；高级=上下游双区
- *    （SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 产物区间白名单，左引物落上游侧、右引物落下游侧）；
+ *  - 成对（MODE_PAIR）：简单=指定产物区间；高级=左/右端双设计区（区内模式，见 v0.1.80）；
+ *    均走 SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 白名单（左引物落左端带、右引物落右端带）；
  *  - 单引物 F 向（MODE_LEFT）/ R 向（MODE_RIGHT）：指定一个区域，引物必须落在选区内
- *    （SEQUENCE_INCLUDED_REGION 限定搜索范围；v0.1.69 起不再发 SEQUENCE_TARGET——
- *    primer3 语义=引物不得覆盖 target，窄选区下会把全部候选判 overlap target 而 ok 0）。
+ *    （SEQUENCE_INCLUDED_REGION 限定搜索范围；v0.1.69 起不再发 SEQUENCE_TARGET）。
  * 打开时自动读取 PrimerEditTool 的鼠标选区（空白处拖拽掠过区间）预填 chr 与起止。
  * 坐标输入均为 IGV 惯例 1-based inclusive。
  *
@@ -28,13 +27,10 @@ import java.util.Map;
  * 产物区间长于产物上限时自动放大上限（否则 primer3 必无解）；新增可折叠「高级参数」
  * 面板（盐浓度/dNTP/引物浓度、二聚体/发夹阈值、多聚X/N/GC钳，留空=primer3 默认）。
  *
- * v0.1.61：鼠标选区 → 一键填充「产物区间 + 上/下游引物设计区」：
- *  - 产物区间 = 选区（钳到当前屏幕内，保证设计出的引物直接可视）；
- *  - 上/下游区 = 选区左右 100~500bp（"如未指定引物设计区域，则选定区域左右100-500bp
- *    的距离作为引物设计区"；同样钳到屏幕，被视野裁窄时贴边退化保证 ≥ 最短引物长）；
- *  - 自动切高级模式把上下游框显示出来；高级模式的产物区间可留空（=不设 SEQUENCE_TARGET）；
- *  - 高级模式产物区间非空时补发 SEQUENCE_TARGET（产物必须覆盖它）+ v0.1.60 同款上限自适应；
- *  - 简单→高级切换时上下游为空则按产物区间自动补全（左右 100~500bp）。
+ * v0.1.61：鼠标选区 → 一键填充「产物区间 + 左/右端引物设计区」。
+ * v0.1.80：区内模型——引物设计区固定在「产物区间两端内侧」（F 向=左端、R 向=右端），
+ *   引物只在这两个设计区内发生设计；runDesign 统一走 OK_REGION_LIST，不再发 SEQUENCE_TARGET
+ *   （TARGET 会把引物 5' 强制顶到选区两端，过于受限且历史上常 0 对）。
  *
  * v0.1.62：修复大面积产物区间必无解（unacceptable product size 全灭）：
  *  - 产物上限自适应从"物理最小 tLen+2×lenMax"改为"模板可达范围 tLen+2×pad"
@@ -113,8 +109,8 @@ public class Primer3Dialog {
      * @param mode   MODE_PAIR / MODE_LEFT / MODE_RIGHT
      * @param adv    true=高级模式（仅成对支持；单引物忽略）
      * @param s,e    简单模式区间（1-based inclusive；单引物=引物区域，成对=产物区间）
-     * @param us,ul  高级模式上游区起(1-based)/长
-     * @param ds,dl  高级模式下游区起(1-based)/长
+     * @param us,ul  高级模式左端设计区起(1-based)/长
+     * @param ds,dl  高级模式右端设计区起(1-based)/长
      * @return {tmplStart0, tmplEnd0}（0-based，end exclusive）
      */
     static int[] regionToTemplate(int mode, boolean adv, int s, int e,
@@ -133,17 +129,17 @@ public class Primer3Dialog {
             int te = Math.min(chrLen, e + pad);
             return new int[]{ts, te};
         }
-        // 高级模式（成对）：模板覆盖上下游区并各扩一个引物长度
+        // 高级模式（成对）：模板覆盖左/右端设计区并各扩一个引物长度
         int us0 = us - 1;
         int ds0 = ds - 1;
         if (us0 < 0 || us0 + ul > chrLen || ds0 < 0 || ds0 + dl > chrLen)
-            throw new Exception("上/下游区超出染色体范围");
+            throw new Exception("左/右端设计区超出染色体范围");
         if (ul < lenMin || dl < lenMin)
-            throw new Exception("上/下游区长度不能小于最短引物长（" + lenMin + "）");
+            throw new Exception("左/右端设计区长度不能小于最短引物长（" + lenMin + "）");
         // v0.1.57：修复 v0.1.56 校验条件写反的 bug（原条件把"两区分离"这一正常场景误判为非法）。
-        // 正确语义：上游区起点必须不晚于下游区起点（允许部分重叠；禁止上游整体在右侧）。
+        // 正确语义：左端设计区起点必须不晚于右端设计区起点（允许部分重叠；禁止左端整体在右侧）。
         if (us0 > ds0)
-            throw new Exception("上游区应在下游区左侧（允许部分重叠）");
+            throw new Exception("左端设计区应在右端设计区左侧（允许部分重叠）");
         int pad = lenMax * 2;
         int ts = Math.max(0, Math.min(us0, ds0) - pad);
         int te = Math.min(chrLen, Math.max(us0 + ul, ds0 + dl) + pad);
@@ -296,21 +292,20 @@ public class Primer3Dialog {
     }
 
     /**
-     * v0.1.61：鼠标选区 → 设计框填充值（产物区间 + 上/下游引物设计区）。
-     * v0.1.65：侧翼默认改为左右 100~200bp（老板："左右留出100-200bp作为上下游引物区间"）。
+     * v0.1.61：鼠标选区 → 设计框填充值（产物区间 + 左/右端引物设计区）。
+     * v0.1.65：侧翼默认改为两端内侧 100~200bp（老板："左右留出100-200bp作为引物设计区间"）。
      * v0.1.67：侧翼语义重写（flank 三档）——裁窄后保 lenMax 而非 minLen，仍不够则伸出视野。
      *
-     * 语义（老板需求）：
+     * 语义（老板需求 v0.1.80）：
      *  - 产物区间 = 选区，钳到当前视野内；
-     *  - 上游区 = 选区左缘外 flankMin~flankMax bp，下游区 = 选区右缘外 flankMin~flankMax bp；
-     *  - 被视野裁到装不下最长引物（lenMax）时：先紧贴选区缘取视野内最大宽，仍不够则
-     *    伸出视野（保设计能力优先，out 标志=1，调用方警告"引物可能在屏幕外"）。
+     *  - F 向设计区 = 产物左端内侧 flankMin~flankMax bp，R 向设计区 = 产物右端内侧 flankMin~flankMax bp；
+     *  - 引物只在这两个设计区内发生设计（区内模式，不再伸到选区外）。产物过窄时两段向中间扩张至相遇。
      *
      * @param selS0,selE0 选区（0-based，end 含；起止可倒）
      * @param vpS0,vpE0   当前视野（0-based，end 不含）；传 0/Integer.MAX_VALUE = 不钳
      * @param minLen      最短引物长
-     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长, 上游超视野, 下游超视野}
-     *         （显示就绪：1-based inclusive + 长度；超视野=0/1，v0.1.67 新增末两位）；
+     * @return {产物起, 产物止, 左端带起, 左端带长, 右端带起, 右端带长, 保留0, 保留0}
+     *         （显示就绪：1-based inclusive + 长度；末两位保留为 0，区内模式不再有"超出屏幕"场景）；
      *         选区完全在视野外返回 null（调用方回退视口填充）
      */
     public static int[] fillFromSelection(int selS0, int selE0, int vpS0, int vpE0, int minLen) {
@@ -334,26 +329,29 @@ public class Primer3Dialog {
         int ps = Math.max(s0, vpS0);
         int pe = Math.min(e0, vpE0 - 1);
         if (pe < ps) return null;                       // 选区已不在屏幕内（平移/缩放走了）
-        int[] up = flank(ps, -1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
-        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
-        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1,
-                up[2], dn[2]};
+        // v0.1.80：区内模式——F 向设计区放在产物左端内侧、R 向设计区放在产物右端内侧
+        // （选中区域两端各取一段作为引物白名单，引物只在这两段内设计；不再伸到选区外）。
+        int L = pe - ps + 1;
+        // 带宽：至少装下最长引物、至多半选区长；产物过窄（L < band）时钳到 L，两段设计区相遇（不再形成负宽/反序）。
+        int band = Math.min(L, Math.max(lenMax, Math.min(flankMax, L / 2)));
+        int la = ps, lb = Math.min(pe, ps + band - 1);            // 左(前)设计区：产物左端内
+        int ra = Math.max(ps, pe - band + 1), rb = pe;            // 右(后)设计区：产物右端内
+        return new int[]{ps + 1, pe + 1, la + 1, lb - la + 1, ra + 1, rb - ra + 1, 0, 0};
     }
 
     /**
-     * v0.1.65：无鼠标选区 → 按当前视口填充（老板："产物区间设定为显示 range 的子集，
-     * 左右留出 100-200bp 作为上下游引物区间，这样引物设计出来可以直接可视"）。
-     * v0.1.67：上下游走 flank 三档语义（装不下最长引物时紧贴/伸出视野，见 flank 注释）。
+     * v0.1.65：无鼠标选区 → 按当前视口填充。
+     * v0.1.80：区内模式——产物区间 = 视野向内收缩 margin 的子集；设计区在产物两端内侧。
      *
      * 语义：
      *  - 产物区间 = 视野向内收缩 margin（默认 150，范围 100~200）的子集；
-     *  - 上游区 = 产物左缘外 flankMin~flankMax bp，下游区 = 产物右缘外 flankMin~flankMax bp；
-     *  - 尽量钳在视野内；窄视野下保设计能力优先（out=1 时上游/下游超出屏幕）。
+     *  - F 向设计区 = 产物左端内侧 flankMin~flankMax bp，R 向设计区 = 产物右端内侧 flankMin~flankMax bp；
+     *  - 引物只在这两个设计区内发生设计；产物过窄时两段向中间扩张至相遇。
      *
      * @param vpS0,vpE0 当前视野（0-based，end 不含）
      * @param minLen    最短引物长（兜底）
      * @param margin    视口边距（产物距视野左右缘的距离）
-     * @return {产物起, 产物止, 上游起, 上游长, 下游起, 下游长, 上游超视野, 下游超视野}
+     * @return {产物起, 产物止, 左端带起, 左端带长, 右端带起, 右端带长, 保留0, 保留0}
      */
     public static int[] fillFromViewport(int vpS0, int vpE0, int minLen, int margin,
                                          int flankMin, int flankMax) {
@@ -372,16 +370,18 @@ public class Primer3Dialog {
             pe = ps + minLen - 1;
             if (pe > vpE0 - 1) { pe = vpE0 - 1; ps = Math.max(vpS0, pe - minLen + 1); }
         }
-        int[] up = flank(ps, -1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
-        int[] dn = flank(pe, +1, vpS0, vpE0, minLen, lenMax, flankMin, flankMax);
-        return new int[]{ps + 1, pe + 1, up[0] + 1, up[1] - up[0] + 1, dn[0] + 1, dn[1] - dn[0] + 1,
-                up[2], dn[2]};
+        // v0.1.80：区内模式——设计区在产物两端内侧（同 fillFromSelection）
+        int L = pe - ps + 1;
+        int band = Math.min(L, Math.max(lenMax, Math.min(flankMax, L / 2)));
+        int la = ps, lb = Math.min(pe, ps + band - 1);
+        int ra = Math.max(ps, pe - band + 1), rb = pe;
+        return new int[]{ps + 1, pe + 1, la + 1, lb - la + 1, ra + 1, rb - ra + 1, 0, 0};
     }
 
     /**
      * v0.1.67：选段单侧侧翼引物设计区（0-based inclusive，长度含两端）。
      *
-     * 老板截图实锤的 bug：窄视野（~85bp）下旧实现把上下游区退化成 18bp（=minLen）
+     * 老板截图实锤的 bug：窄视野（~85bp）下旧实现把设计区退化成 18bp（=minLen）
      * 且伸进产物区——18bp 装 18nt 引物零余量，primer3 必无解。
      * 新语义（按优先级）：
      *  1) 理想 = 选段边缘外 flankMin~flankMax bp；被视野裁窄后仍 ≥ lenMax（最长引物长）
@@ -511,7 +511,7 @@ public class Primer3Dialog {
     private static class Dlg extends JDialog {
         private final int mode;   // MODE_PAIR / MODE_LEFT / MODE_RIGHT
         private final boolean quick;   // v0.1.69：快速设计（无视选区，视口中心取 100bp）
-        private final JComboBox modeBox = new JComboBox(new String[]{"简单：指定产物区间", "高级：分别指定上/下游区"});
+        private final JComboBox modeBox = new JComboBox(new String[]{"简单：指定产物区间", "高级：分别指定左/右端设计区"});
         private final JTextField chrF = new JTextField(6);
         private final JTextField groupF = new JTextField("primer3", 10);
         // 简单模式
@@ -522,7 +522,7 @@ public class Primer3Dialog {
         private final JTextField uLenF = new JTextField(6);
         private final JTextField dStartF = new JTextField(8);
         private final JTextField dLenF = new JTextField(6);
-        // v0.1.65：无选区时「产物=视野子集」的边距 + 上下游侧翼范围（打开对话框时读取一次）
+        // v0.1.65：无选区时「产物=视野子集」的边距 + 设计区侧翼范围（打开对话框时读取一次）
         private final JTextField vpMarginF = new JTextField("150", 4);
         private final JTextField flankMinF = new JTextField("100", 4);
         private final JTextField flankMaxF = new JTextField("200", 4);
@@ -595,17 +595,17 @@ public class Primer3Dialog {
             simplePanel.add(tEndF);
             simplePanel.add(new JLabel(single
                     ? "bp（引物必须落在该区域内，primer3 按参数挑最优）"
-                    : "bp（简单：上下游由 primer3 自动选择；高级：可留空=不强制覆盖）"));
-            advPanel.add(new JLabel("上游区:"));
+                    : "bp（简单：两端设计区由 primer3 自动选择；高级：可留空=不强制覆盖）"));
+            advPanel.add(new JLabel("左端设计区:"));
             advPanel.add(uStartF);
             advPanel.add(new JLabel("起 + 长"));
             advPanel.add(uLenF);
-            advPanel.add(new JLabel("bp    下游区:"));
+            advPanel.add(new JLabel("bp    右端设计区:"));
             advPanel.add(dStartF);
             advPanel.add(new JLabel("起 + 长"));
             advPanel.add(dLenF);
             advPanel.add(new JLabel("bp"));
-            advPanel.add(new JLabel(" ← 引物设计区：左引物落上游区、右引物落下游区（默认=产物两侧100–200bp）"));
+            advPanel.add(new JLabel(" ← 引物设计区：左引物落左端设计区、右引物落右端设计区（默认=产物两端内侧100–200bp）"));
 
             // v0.1.65：无选区时按视口填充的边距/侧翼（打开时读取；有鼠标选区时以选区为准）
             JPanel fillPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 4, 2));
@@ -615,8 +615,8 @@ public class Primer3Dialog {
             fillPanel.add(flankMinF);
             fillPanel.add(new JLabel("-"));
             fillPanel.add(flankMaxF);
-            fillPanel.add(new JLabel("bp（无选区时：产物=视野内缩边距，上下游=产物两侧侧翼；"
-                    + "视口过窄时上下游将超出屏幕并提示，不会压成无解小区间）"));
+            fillPanel.add(new JLabel("bp（无选区时：产物=视野内缩边距，设计区=产物两端内侧侧翼；"
+                    + "视口过窄时设计区将超出屏幕并提示，不会压成无解小区间）"));
 
             JPanel regionPanel = new JPanel();
             regionPanel.setLayout(new BoxLayout(regionPanel, BoxLayout.Y_AXIS));
@@ -632,7 +632,7 @@ public class Primer3Dialog {
                 prodMaxF.setEnabled(false);
             }
 
-            // v0.1.61：鼠标选区 → 产物区间(=选区,钳屏幕) + 上下游(=选区左右100~500bp,钳屏幕)，切高级模式；
+            // v0.1.61：鼠标选区 → 产物区间(=选区,钳屏幕) + 设计区(=选区两端内侧100~500bp,钳屏幕)，切高级模式；
             //           选区不在屏幕 → 回退视口填充（v0.1.59 逻辑）。均 1-based inclusive 显示。
             // 注意：选区 end 为 0-based 含（currentSelection 语义），视口 end 为 0-based 不含，分别处理。
             boolean selOffscreen = false;
@@ -654,21 +654,21 @@ public class Primer3Dialog {
                     tEndF.setText(String.valueOf(f[1]));
                     uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                     dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
-                    boolean outView = f.length > 6 && (f[6] != 0 || f[7] != 0);   // v0.1.67：上下游超出屏幕
+                    boolean outView = f.length > 6 && (f[6] != 0 || f[7] != 0);   // v0.1.67：设计区超出屏幕
                     if (!single) {
-                        // 高级模式：显示上下游框（modeBox 监听器稍后才注册，不会同步触发，需手动设可见性）
+                        // 高级模式：显示设计区框（modeBox 监听器稍后才注册，不会同步触发，需手动设可见性）
                         modeBox.setSelectedIndex(1);
                         simplePanel.setVisible(true);
                         advPanel.setVisible(true);
                         statusL.setText("<html><font color='gray'>已按选定区域填充：产物 " + f[0] + "-" + f[1]
-                                + "；上游 " + f[2] + "+" + f[3] + "bp；下游 " + f[4] + "+" + f[5]
-                                + "bp（默认两侧 100–200bp 可改；均已限制在屏幕内）</font></html>");
+                                + "；左端设计区 " + f[2] + "+" + f[3] + "bp；右端设计区 " + f[4] + "+" + f[5]
+                                + "bp（默认两端内侧 100–200bp 可改；均已限制在屏幕内）</font></html>");
                     } else {
                         statusL.setText("<html><font color='gray'>已按选定区域填充引物区域 "
                                 + f[0] + "-" + f[1] + "</font></html>");
                     }
                     if (outView) {
-                        statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：上下游引物区已超出当前屏幕"
+                        statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：引物设计区已超出当前屏幕"
                                 + "（为保住可设计性未强行压成 minLen 小区间）。设计出的引物可能在屏幕外——"
                                 + "缩放即可见；或放大视野后重新打开本对话框。</font></html>");
                     }
@@ -678,14 +678,14 @@ public class Primer3Dialog {
                 }
             }
             if (sel == null && vp != null) {
-                // v0.1.65：无选区 → 产物=视野子集（左右各留 margin，默认150），上下游=产物两侧
+                // v0.1.65：无选区 → 产物=视野子集（左右各留 margin，默认150），设计区=产物两端内侧
                 // flankMin~flankMax（默认100~200）——产物+引物全在屏幕内，设计结果直接可视。
-                // v0.1.67：窄视野下 flank 三档语义可能让上下游超出屏幕（out=1），弹警告。
+                // v0.1.67：窄视野下设计区可能超出屏幕（out=1），弹警告。
                 int s0 = Integer.parseInt(vp[1]);
                 int e0 = Integer.parseInt(vp[2]);
                 if (s0 > e0) { int t = s0; s0 = e0; e0 = t; }
                 // v0.1.69：快速设计——视口中心取 100bp 作引物区/产物区（不内缩、不侧翼），
-                // 成对时上下游=产物两侧 100~200bp；随后跳过视口子集填充。
+                // 成对时设计区=产物两端内侧 100~200bp；随后跳过视口子集填充。
                 boolean quickFilled = false;
                 if (quick) {
                     int qMin = 18;
@@ -698,13 +698,13 @@ public class Primer3Dialog {
                                 qMin, 100, 200, 27);
                         uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                         dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
-                        modeBox.setSelectedIndex(1);   // 成对：显示上下游框
+                        modeBox.setSelectedIndex(1);   // 成对：显示设计区框
                         simplePanel.setVisible(true);
                         advPanel.setVisible(true);
                     }
                     statusL.setText("<html><font color='gray'>⚡ 快速设计：已取视口中心 100bp 作"
                             + (single ? "引物区" : "产物区") + "（" + q[0] + "-" + q[1] + "）"
-                            + (single ? "" : "，上下游=两侧 100–200bp")
+                            + (single ? "" : "，设计区=两端内侧 100–200bp")
                             + "；若 0 对将自动降级条件重试</font></html>");
                     quickFilled = true;
                 }
@@ -721,7 +721,7 @@ public class Primer3Dialog {
                 uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                 dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
                 if (!single) {
-                    modeBox.setSelectedIndex(1);   // 成对：显示上下游框（监听器未注册，手动设可见性）
+                    modeBox.setSelectedIndex(1);   // 成对：显示设计区框（监听器未注册，手动设可见性）
                     simplePanel.setVisible(true);
                     advPanel.setVisible(true);
                 }
@@ -730,11 +730,11 @@ public class Primer3Dialog {
                     statusL.setText("<html><font color='gray'>选区已不在当前屏幕，已按当前视图填充</font></html>");
                 } else {
                     statusL.setText("<html><font color='gray'>已按当前视图填充：产物 " + f[0] + "-" + f[1]
-                            + "（视野内缩 " + margin + "bp）；上游 " + f[2] + "+" + f[3] + "bp；下游 "
-                            + f[4] + "+" + f[5] + "bp——产物与引物均在屏幕内，设计结果直接可视</font></html>");
+                            + "（视野内缩 " + margin + "bp）；左端设计区 " + f[2] + "+" + f[3] + "bp；右端设计区 "
+                            + f[4] + "+" + f[5] + "bp——产物与引物设计区均在屏幕内，设计结果直接可视</font></html>");
                 }
                 if (outView) {
-                    statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：上下游引物区已超出当前屏幕"
+                    statusL.setText("<html><font color='#B35C00'>⚠ 视口过窄：引物设计区已超出当前屏幕"
                             + "（为保住可设计性未强行压成 minLen 小区间）。设计出的引物可能在屏幕外——"
                             + "缩放即可见；或放大视野后重新打开本对话框。</font></html>");
                 }
@@ -843,10 +843,22 @@ public class Primer3Dialog {
                     // v0.1.61：高级模式同时显示产物区间行（留空=不强制覆盖）；简单模式只显示产物区间
                     simplePanel.setVisible(true);
                     advPanel.setVisible(adv);
-                    if (adv && !single) autoFillFlanks();   // 上下游为空 → 按产物区间两侧100~200bp补全
+                    if (adv && !single) autoFillFlanks();   // 设计区为空 → 按产物区间两端内侧补全
+                    updatePreview();   // v0.1.81：切换模式后设计带可能变化，同步预览
                     pack();
                 }
             });
+            // v0.1.81：实时预览——任意字段变动即把产物区/设计区高亮到 IGV 面板
+            addPreviewListener(chrF);
+            addPreviewListener(tStartF);
+            addPreviewListener(tEndF);
+            addPreviewListener(uStartF);
+            addPreviewListener(uLenF);
+            addPreviewListener(dStartF);
+            addPreviewListener(dLenF);
+            addPreviewListener(flankMaxF);
+            addPreviewListener(lenMaxF);
+            updatePreview();
             cancel.addActionListener(new ActionListener() {
                 public void actionPerformed(ActionEvent e) {
                     dispose();
@@ -863,7 +875,7 @@ public class Primer3Dialog {
         }
 
         /**
-         * v0.1.61：切到高级模式时上/下游区为空 → 按产物区间左右 100~500bp 自动补全。
+         * v0.1.61：切到高级模式时左/右端设计区为空 → 按产物区间两端内侧 100~500bp 自动补全。
          * 无视野上下文（不钳屏幕）；产物区间也为空则不动，交由 runDesign 报友好错误。
          */
         private void autoFillFlanks() {
@@ -878,9 +890,56 @@ public class Primer3Dialog {
                 int[] f = fillFromSelection(s1 - 1, e1 - 1, 0, Integer.MAX_VALUE, lenMin0);
                 uStartF.setText(String.valueOf(f[2])); uLenF.setText(String.valueOf(f[3]));
                 dStartF.setText(String.valueOf(f[4])); dLenF.setText(String.valueOf(f[5]));
-                statusL.setText("<html><font color='gray'>已按产物区间自动补全上下游区（两侧 100–200bp，可改）</font></html>");
+                statusL.setText("<html><font color='gray'>已按产物区间自动补全左/右端设计区（两端内侧 100–200bp，可改）</font></html>");
             } catch (Exception ignore) {
             }
+        }
+
+        /**
+         * v0.1.81：实时预览——把产物区/设计区换算成 0-based 坐标，推给 PrimerEditTool 高亮到 IGV 面板。
+         * 成对：设计带取「高级字段」或「产物两端内侧」(简单模式)；单引物：设计区=整个引物区域。
+         */
+        private void updatePreview() {
+            try {
+                String chr = chrF.getText().trim();
+                if (chr.isEmpty() || tStartF.getText().trim().isEmpty() || tEndF.getText().trim().isEmpty()) {
+                    PrimerEditTool.clearPcrPreview();
+                    return;
+                }
+                int s = Integer.parseInt(tStartF.getText().trim());
+                int e = Integer.parseInt(tEndF.getText().trim());
+                if (s > e) { int t = s; s = e; e = t; }
+                int s0 = s - 1, e0 = e;   // 0-based [s0, e0)
+                int lenMax = readBounded(lenMaxF, 27, 1, 1000);
+                int fMax = readBounded(flankMaxF, 200, 1, 5000);
+                int L = e - (s - 1);
+                int band = Math.max(lenMax, Math.min(fMax, L / 2));
+                int a0, a1, b0, b1;
+                if (mode == MODE_PAIR) {
+                    String us = uStartF.getText().trim(), ul = uLenF.getText().trim(),
+                           ds = dStartF.getText().trim(), dl = dLenF.getText().trim();
+                    if (!us.isEmpty() && !ul.isEmpty() && !ds.isEmpty() && !dl.isEmpty()) {
+                        a0 = Integer.parseInt(us) - 1; a1 = a0 + Integer.parseInt(ul);
+                        b0 = Integer.parseInt(ds) - 1; b1 = b0 + Integer.parseInt(dl);
+                    } else {
+                        a0 = s0; a1 = s0 + band; b0 = e0 - band; b1 = e0;
+                    }
+                } else {
+                    a0 = s0; a1 = e0; b0 = s0; b1 = e0;   // 单引物：设计区=整个引物区域
+                }
+                PrimerEditTool.setPcrPreview(chr, s0, e0, a0, a1, b0, b1);
+            } catch (Exception ignore) {
+                PrimerEditTool.clearPcrPreview();
+            }
+        }
+
+        /** v0.1.81：给文本框挂「改动即刷新预览」的监听器。 */
+        private void addPreviewListener(JTextField f) {
+            f.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+                public void insertUpdate(javax.swing.event.DocumentEvent e) { updatePreview(); }
+                public void removeUpdate(javax.swing.event.DocumentEvent e) { updatePreview(); }
+                public void changedUpdate(javax.swing.event.DocumentEvent e) { updatePreview(); }
+            });
         }
 
         private static String titleOf(int mode) {
@@ -973,7 +1032,7 @@ public class Primer3Dialog {
                 putIfPresent(params, "PRIMER_MAX_END_GC", maxEndGcF);
 
                 // ---- 区域 ----
-                // v0.1.61：产物区间在高级模式改为可选（留空=不设 SEQUENCE_TARGET，仅按上下游区约束）；
+                // v0.1.61：产物区间在高级模式改为可选（留空=不设 SEQUENCE_TARGET，仅按设计区约束）；
                 // 简单/单引物模式必填（空则给友好提示，不再是"区域起 不是有效整数"）。
                 boolean adv = modeBox.getSelectedIndex() == 1;
                 boolean single = (mode != MODE_PAIR);
@@ -1000,80 +1059,60 @@ public class Primer3Dialog {
                 } else {
                     params.put("PRIMER_PICK_LEFT_PRIMER", "1");
                     params.put("PRIMER_PICK_RIGHT_PRIMER", "1");
-                    // v0.1.60/v0.1.62：产物区间即 SEQUENCE_TARGET。primer3 语义=产物必须**覆盖**整个
-                    // target（不是重叠），故产物 ∈ [tLen+L+R, 模板可达上限]。
-                    // v0.1.60 把上限只放到物理最小 tLen+2×lenMax → 引物必须双双紧贴选区边缘才可能
-                    // 有解，OK 候选位置漂几个 bp 就全部 unacceptable product size（实测 2.6kb 选区：
-                    // considered 16902 全灭、0 对；换序列偶发 5/2 对，大面积选区基本必崩）。
-                    // v0.1.62 修正：上限放到**模板物理可达范围** tLen+2×pad（pad=max(2×最长引物,120)，
-                    // 与 regionToTemplate 一致）——引物可在选区两侧各最多外漂 pad，产物仍覆盖整个
-                    // 选区；primer3 自会挑最贴近选区的产物（实测多种 seed 满额返回，产物均覆盖选区）。
-                    if (hasProduct) {
-                        int tLen = e - (s - 1);
-                        int pad = Math.max(lenMax * 2, 120);
-                        int needMax = tLen + 2 * pad;
-                        if (prodMax < needMax) {
-                            prodMax = needMax;
-                            statusL.setText("提示: 产物上限已放大为 " + prodMax
-                                    + "bp（覆盖 " + tLen + "bp 区间 + 两侧引物各最多外漂 " + pad + "bp）");
-                        }
-                    }
-                    params.put("PRIMER_PRODUCT_SIZE_RANGE", prodMin + "-" + prodMax);
+                    // v0.1.80：区内模式——产物长度范围在下方依据两端设计带的可达产物长度计算，
+                    // 此处不再预置（避免把引物推到选区外）。
                 }
 
-                // 仅高级+成对才读上/下游区字段：单引物时 modeBox 禁用（永远简单模式），
-                // advPanel 隐藏且字段为空，无条件解析会抛「上游区起 不是有效整数」（v0.1.58）。
+                // 仅高级+成对才读左/右端设计区字段：单引物时 modeBox 禁用（永远简单模式），
+                // advPanel 隐藏且字段为空，无条件解析会抛「左端设计区起 不是有效整数」（v0.1.58）。
                 // v0.1.61：高级模式字段为空 → 友好错误（引导切回简单模式或补全）。
                 int us = 0, ul = 0, ds = 0, dl = 0;
                 if (adv && !single) {
                     if (uStartF.getText().trim().isEmpty() || uLenF.getText().trim().isEmpty()
                             || dStartF.getText().trim().isEmpty() || dLenF.getText().trim().isEmpty())
-                        throw new Exception("高级模式需填写上/下游区（起+长）；或切回简单模式只指定产物区间");
-                    us = i(uStartF, "上游区起"); ul = i(uLenF, "上游区长");
-                    ds = i(dStartF, "下游区起"); dl = i(dLenF, "下游区长");
+                        throw new Exception("高级模式需填写左/右端设计区（起+长）；或切回简单模式只指定产物区间");
+                    us = i(uStartF, "左端设计区起"); ul = i(uLenF, "左端设计区长");
+                    ds = i(dStartF, "右端设计区起"); dl = i(dLenF, "右端设计区长");
+                } else if (!single && hasProduct) {
+                    // v0.1.80：简单成对也把设计区放在产物两端内侧（不再用 SEQUENCE_TARGET 把引物推到区外）。
+                    // 默认设计带宽度 = min(200, 产物长/2)，至少装下最长引物长；并写回字段便于用户查看。
+                    int L = e - (s - 1);
+                    int band = Math.min(L, Math.max(lenMax, Math.min(readBounded(flankMaxF, 200, 1, 5000), L / 2)));
+                    us = s; ul = band; ds = e - band + 1; dl = band;
+                    uStartF.setText(String.valueOf(us)); uLenF.setText(String.valueOf(ul));
+                    dStartF.setText(String.valueOf(ds)); dLenF.setText(String.valueOf(dl));
                 }
 
                 int[] tmpl = regionToTemplate(mode, adv && !single, s, e, us, ul, ds, dl,
                         chrLen, lenMin, lenMax);
                 int tmplStart = tmpl[0], tmplEnd = tmpl[1];
 
-                if (single || !adv) {
+                if (single) {
+                    // 单引物：引物必须落在选区内（SEQUENCE_INCLUDED_REGION 限定搜索范围）
                     int s0 = s - 1;
-                    if (single) {
-                        // 引物必须落在选区内：INCLUDED_REGION 限定搜索范围。
-                        // v0.1.69：删除原来补发的 SEQUENCE_TARGET（选区中段 ≤20bp）——
-                        // primer3 语义=引物**不得覆盖** target，窄选区（如 19bp 放 18nt 引物
-                        // 仅 2 个候选位）下全部候选被判 overlap target → ok 0
-                        // （老板截图实锤 "LEFT: considered 2, overlap target 2, ok 0"）。
-                        // 单引物的诉求就是"落在选区内"，INCLUDED_REGION 已足够。
-                        params.put("SEQUENCE_INCLUDED_REGION", (s0 - tmplStart) + "," + (e - s0));
-                    } else {
-                        params.put("SEQUENCE_TARGET", (s0 - tmplStart) + "," + (e - s0));
-                    }
+                    params.put("SEQUENCE_INCLUDED_REGION", (s0 - tmplStart) + "," + (e - s0));
                 } else {
-                    // 高级模式（成对）：primer3 无单独的"左右引物区"官方 tag（PRIMER_LEFT_OK_REGION 不存在，
-                    // 未知 tag 会被静默忽略）。SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 接受逗号分隔的
-                    // 「start,len」区对列表（模板坐标；实测必须 ≥2 对，单对会 PRIMER_ERROR），
-                    // 语义=**左引物必须落在第一个区、右引物必须落在第二个区**（顺序不可反，反序实测 0 对）
-                    // ——正好实现"分别指定上/下游引物设计区"。
-                    // v0.1.61 修复：v0.1.56 起把上下游合并成单对 "pStart,pEnd" 发送 → 一直 PRIMER_ERROR
-                    // → 高级模式永远"未找到合适引物对"（从未端到端用过）。现按 上游区,下游区 两对发送。
-                    // 另：产物区间非空时补发 SEQUENCE_TARGET（产物必须覆盖它），与双区约束叠加。
-                    int pStart = Math.min(us - 1, ds - 1);
-                    int pEnd = Math.max(us - 1 + ul, ds - 1 + dl);
-                    if (hasProduct) {
-                        if (s - 1 < pStart || e > pEnd)
-                            throw new Exception("产物区间应落在上下游区跨度内（" + (pStart + 1) + "-" + pEnd
-                                    + "），或留空不强制覆盖");
-                        params.put("SEQUENCE_TARGET", (s - 1 - tmplStart) + "," + (e - (s - 1)));
-                    }
+                    // v0.1.80：区内模式（简单/高级成对统一）——左引物落左端带、右引物落右端带
+                    // （SEQUENCE_PRIMER_PAIR_OK_REGION_LIST 白名单）。不再发 SEQUENCE_TARGET：
+                    // TARGET 要求产物覆盖整个选区会把引物 5' 强制顶到选区两端，过于受限且历史上常 0 对。
+                    if (us <= 0 || ul < lenMin || ds <= 0 || dl < lenMin)
+                        throw new Exception("引物设计区非法（两端带宽度需 ≥ 最短引物长 " + lenMin + "）");
+                    if (us > ds) throw new Exception("左设计区应在右设计区左侧（允许部分重叠）");
                     params.put("SEQUENCE_PRIMER_PAIR_OK_REGION_LIST",
                             (us - 1 - tmplStart) + "," + ul + "," + (ds - 1 - tmplStart) + "," + dl);
+                    // 产物长度范围：可达区间 = [L - ul - dl + 1, L]（两带最内侧/最外侧时），
+                    // 与用户设定取交（尊重用户收窄，但不允许溢出可达范围导致 0 对）。
+                    int L = e - (s - 1);
+                    int aMin = Math.max(1, L - ul - dl + 1);
+                    int aMax = L;
+                    int uMin = Math.max(prodMin, aMin), uMax = Math.min(prodMax, aMax);
+                    if (uMin > uMax) { uMin = aMin; uMax = aMax; prodMin = aMin; prodMax = aMax; }
+                    prodMinF.setText(String.valueOf(prodMin));
+                    prodMaxF.setText(String.valueOf(prodMax));
+                    params.put("PRIMER_PRODUCT_SIZE_RANGE", uMin + "-" + uMax);
                 }
-                // v0.1.62：模板容量下限重算。prodMax 已是"模板可达产物上限"（含引物自身空间），
-                // 模板 ≥ prodMax 即可；旧公式 prodMax+2×lenMax 会把引物长度重复计一遍，
-                // 在新的 prodMax（=tLen+2×pad）下必误报"模板区装不下最长产物"。
-                // 有 TARGET 时产物物理最小 = tLen + 2×lenMax，模板（区间±pad，pad≥2×lenMax）恒可容纳。
+                // v0.1.62/0.1.80：模板容量下限重算。区内模式下产物 ≤ 选区长 L，模板需 ≥ L + 2×lenMax
+                // （覆盖产物 + 两端引物）；简单/高级路径模板均为选区 ±2×lenMax，恒满足。
                 int need;
                 if (single) need = 2 * lenMax;
                 else if (hasProduct) need = (e - (s - 1)) + 2 * lenMax;
@@ -1155,6 +1194,12 @@ public class Primer3Dialog {
 
         private static String escape(String s) {
             return s == null ? "未知错误" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
+        }
+
+        @Override
+        public void dispose() {
+            PrimerEditTool.clearPcrPreview();   // v0.1.81：关闭对话框即撤下实时预览高亮
+            super.dispose();
         }
     }
 }

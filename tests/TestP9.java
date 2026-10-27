@@ -7,7 +7,7 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * v0.1.67：tooltip 串显修复 + flank 窄视野无解修正。
+ * v0.1.80：区内模型回归（设计区落在产物两端内侧）+ tooltip 串显修复（hitByPosition）。
  *
  * 老板截图 1（串显）：鼠标停在下面引物（P2_F）上，悬浮框显示上面引物（P1_F）的信息。
  *   根因：getValueStringAt 只按基因组坐标命中——不分行、正序返回先加入者；
@@ -15,15 +15,14 @@ import java.util.List;
  *   修复：优先用鼠标实时坐标跑行感知命中（PrimerEditTool.mousePanelXY + hitTest(x,y,chr)），
  *   bp 兜底改后画优先（PrimerStore.hitByPosition(lastFirst=true)）。
  *
- * 老板截图 2（上下游区 18bp 无解）：窄视野（~85bp）下 flank 退化成 minLen=18 且伸进产物区，
+ * 老板截图 2（窄选区无解）：旧"区外 flank"模型下，56bp 选区把设计区退化到产物外/伸进产物，
  *   18bp 装 18nt 引物零余量 → primer3 必 0 对。
- *   修复：flank 三档语义——① 理想（缘外 100~200）裁后仍 ≥ lenMax 就用；
- *   ② 否则紧贴选段缘取视野内最大宽；③ 仍 < lenMax → 伸出视野取 want 宽，out=1 警告。
+ *   v0.1.80 区内模型修复：设计区=产物两端内侧（带宽=min(产物长, max(lenMax, min(flankMax, 产物长/2)))），
+ *   引物只在产物内部两端的设计带内发生设计，窄选区也能在带内放下最长引物。
  *
  * 本测试覆盖：
- *  1) flank 三档：截图场景复刻（上下游 101bp + out=1）、hug 档（视野内紧贴）、
- *     lenMax 边界（lenMax 越大越容易出界）、理想档不变、不伸进产物区；
- *  2) fillFromViewport 窄视野：hug 档与出界档；
+ *  1) 区内模型 fillFromSelection：常规/窄选区/lenMax 边界/理想档/兼容重载/屏外；
+ *  2) 区内模型 fillFromViewport：窄视野退化/85bp 视野/大视野理想档；
  *  3) hitByPosition 排序：重叠区后加入者优先（tooltip 兜底修复的核心）。
  */
 public class TestP9 {
@@ -44,67 +43,56 @@ public class TestP9 {
     public static void main(String[] a) throws Exception {
         PrimerStore.autosaveEnabled = false;
 
-        // ============ 1) flank 三档语义 ============
-        // 1a) 老板截图场景复刻：视野 ~85bp，产物 56bp，lenMax=27（截图引物长上限）
-        //     旧实现：上下游各 18bp 且下游伸进产物区 → 无解
-        //     新实现：上下游各伸出视野取 101bp（want = max(flankMax-flankMin+1, lenMax) = 101）
+        // ============ 1) 区内模型：fillFromSelection 设计带落在产物两端内侧 ============
+        // 1a) 老板截图场景复刻：选区 ~56bp（[2290141,2290196]），lenMax=27
+        //     ps=2290141, pe=2290196, L=56, band=min(56,max(27,min(200,28)))=28
+        //     左带 [2290141,2290168] 长28 →1-based 2290142+28；右带 [2290169,2290196] 长28 →2290170+28
         int[] f = Primer3Dialog.fillFromSelection(2290141, 2290196, 2290123, 2290208, 18, 100, 200, 27);
-        check(f != null && f.length == 8, "返回 8 元素（含两个 out 标志）");
-        check(f[3] == 101, "上游 101bp（伸出视野） " + f[2] + "+" + f[3]);
-        check(f[5] == 101, "下游 101bp（伸出视野） " + f[4] + "+" + f[5]);
-        check(f[6] == 1 && f[7] == 1, "上下游均标记超视野 out=1");
-        check(f[3] >= 27 && f[5] >= 27, "上下游均 ≥ lenMax=27（不再 18bp 无解）");
-        check(f[2] + f[3] - 1 < f[0], "上游不伸进产物区 (" + (f[2] + f[3] - 1) + " < " + f[0] + ")");
-        check(f[4] > f[1], "下游不伸进产物区 (" + f[4] + " > " + f[1] + ")");
+        check(f != null && f.length == 8, "返回 8 元素");
+        check(f[2] == 2290142 && f[3] == 28, "左端设计区=产物左缘内28bp (起2290142 长28)");
+        check(f[4] == 2290170 && f[5] == 28, "右端设计区=产物右缘内28bp (起2290170 长28)");
+        check(f[6] == 0 && f[7] == 0, "区内模型无超出屏幕标记(out=0)");
+        check(f[2] >= f[0] && f[4] <= f[1], "设计区完全落在产物内部 (左端≥产物起, 右端≤产物止)");
 
-        // 1b) hug 档：理想全在视野外，但紧贴选段缘后视野内够 lenMax → 不出界
-        //     视野 [10000,10080)，产物 [10050,10069]，lenMax=30
-        //     上游 hug [10000,10049] 宽 50 ≥ 30 → 用（out=0）；下游 hug 仅 10bp < 30 → 出界
-        int[] h = Primer3Dialog.fillFromSelection(10050, 10069, 10000, 10080, 18, 100, 200, 30);
-        check(h[3] == 50 && h[6] == 0, "上游 hug 视野内 50bp out=0 " + h[2] + "+" + h[3]);
-        check(h[5] == 101 && h[7] == 1, "下游 hug 仅 10bp<30 → 出界 101bp " + h[4] + "+" + h[5]);
-        check(h[2] + h[3] - 1 < h[0] && h[4] > h[1], "hug 档也不伸进产物区");
+        // 1b) lenMax 边界：band 至少装下最长引物，产物过窄时钳到产物长
+        int[] h40 = Primer3Dialog.fillFromSelection(2290141, 2290196, 2290123, 2290208, 18, 100, 200, 40);
+        check(h40[3] == 40 && h40[5] == 40, "lenMax=40 时设计带宽=40（≤产物长）");
+        int[] h60 = Primer3Dialog.fillFromSelection(2290141, 2290196, 2290123, 2290208, 18, 100, 200, 60);
+        check(h60[3] == 56 && h60[5] == 56, "lenMax=60 > 产物长 → 设计区相遇(带宽=产物长56)");
 
-        // 1c) lenMax 边界：同一 hug 场景，lenMax 决定档位
-        int[] h40 = Primer3Dialog.fillFromSelection(10050, 10069, 10000, 10080, 18, 100, 200, 40);
-        check(h40[3] == 50 && h40[6] == 0, "lenMax=40 ≤ hug 50 → 仍 hug 不出界");
-        int[] h60 = Primer3Dialog.fillFromSelection(10050, 10069, 10000, 10080, 18, 100, 200, 60);
-        check(h60[3] == 101 && h60[6] == 1, "lenMax=60 > hug 50 → 出界 101bp");
-
-        // 1d) 理想档不变（大视野，与 TestP7 语义一致）：缘外 100~200
+        // 1c) 大视野理想档：全区内，带宽=flankMax（200）
         int[] id = Primer3Dialog.fillFromSelection(10000, 10400, 9000, 11000, 18, 100, 200, 27);
-        check(id[2] == 9801 && id[3] == 101 && id[6] == 0, "理想档上游 9801+101 out=0");
-        check(id[4] == 10501 && id[5] == 101 && id[7] == 0, "理想档下游 10501+101 out=0");
+        // ps=10000,pe=10400,L=401,band=200 → 左带[10001,10200] 右带[10202,10400]
+        check(id[2] == 10001 && id[3] == 200 && id[6] == 0, "理想档左端设计区=产物左缘内200bp");
+        check(id[4] == 10202 && id[5] == 200 && id[7] == 0, "理想档右端设计区=产物右缘内200bp");
 
-        // 1e) 理想被裁但 ≥ lenMax → 用裁后理想（TestP7 margin=150 语义保持）
-        int[] cl = Primer3Dialog.fillFromSelection(10150, 19849, 10000, 20000, 18, 100, 200, 30);
-        check(cl[2] == 10001 && cl[3] == 51 && cl[6] == 0, "裁后理想 51bp ≥ lenMax → 用 " + cl[2] + "+" + cl[3]);
-
-        // 1f) want 随 lenMax 放大：lenMax=200 → 出界宽 = max(101, 200) = 200
-        int[] big = Primer3Dialog.fillFromSelection(2290141, 2290196, 2290123, 2290208, 18, 100, 200, 200);
-        check(big[3] == 200 && big[5] == 200, "lenMax=200 → 出界宽 want=200");
-
-        // 1g) 兼容重载（5 参/7 参）：lenMax 默认 max(minLen,30)，旧下标语义不变
+        // 1d) 兼容重载（5 参/7 参）：语义不变
         int[] c5 = Primer3Dialog.fillFromSelection(10000, 10400, 9000, 11000, 18);
-        check(c5.length == 8 && c5[2] == 9801 && c5[3] == 101 && c5[6] == 0, "5 参兼容重载语义不变");
+        // 5参默认 flankMin=100,flankMax=200,lenMax=max(18,30)=30 → band=200
+        check(c5.length == 8 && c5[2] == 10001 && c5[3] == 200 && c5[6] == 0, "5 参兼容重载语义不变");
         int[] c7 = Primer3Dialog.fillFromSelection(10000, 10400, 9000, 11000, 18, 100, 200);
-        check(c7.length == 8 && c7[4] == 10501 && c7[5] == 101, "7 参兼容重载语义不变");
+        // 7参默认 lenMax=max(18,30)=30 → band=200
+        check(c7.length == 8 && c7[4] == 10202 && c7[5] == 200, "7 参兼容重载语义不变");
         check(Primer3Dialog.fillFromSelection(5000, 5100, 9000, 11000, 18) == null, "屏外选区仍返回 null");
 
-        // ============ 2) fillFromViewport 窄视野 ============
-        // 2a) 100bp 视野（TestP7 场景）：产物 18bp 居中，上下游 hug 视野内 40/42bp，均 out=0
+        // ============ 2) 区内模型：fillFromViewport ============
+        // 2a) 100bp 视野 + margin=150 → 产物退化中段 minLen，设计区=产物两端内侧相遇
         int[] v = Primer3Dialog.fillFromViewport(10000, 10100, 18, 150, 100, 200, 30);
-        check(v[2] == 10001 && v[3] == 40 && v[6] == 0, "窄视野上游 hug 40bp 屏内 " + v[2] + "+" + v[3]);
-        check(v[4] == 10059 && v[5] == 42 && v[7] == 0, "窄视野下游 hug 42bp 屏内 " + v[4] + "+" + v[5]);
-        check(v[3] >= 18 && v[5] >= 18, "上下游仍 ≥18bp（TestP7 旧断言保持）");
-        // 2b) 85bp 视野 + margin=0 → 产物=全视野，上下游均出界
+        // ps=10150,pe=9949 → mid-clamp ps=10040,pe=10057,L=18,band=18 → 左带[10041]右带[10041]
+        check(v[2] == 10041 && v[3] == 18 && v[6] == 0, "窄视野左端设计区=产物左缘内18bp 屏内 " + v[2] + "+" + v[3]);
+        check(v[4] == 10041 && v[5] == 18 && v[7] == 0, "窄视野右端设计区=产物右缘内18bp 屏内 " + v[4] + "+" + v[5]);
+        check(v[3] >= 18 && v[5] >= 18, "两端设计区仍 ≥18bp");
+        // 2b) 85bp 视野 + margin=0 → 产物=全视野，设计区=产物两端内侧（区内，out=0）
         int[] v2 = Primer3Dialog.fillFromViewport(2290123, 2290208, 18, 0, 100, 200, 27);
-        check(v2[6] == 1 && v2[7] == 1 && v2[3] == 101 && v2[5] == 101,
-                "85bp 视野 margin=0 → 上下游出界 101bp");
-        // 2c) 大视野理想档不变（TestP7 margin=200 场景）
+        // ps=2290123,pe=2290207,L=85,band=min(85,max(27,min(200,42)))=42
+        // 左带[2290124,2290165] 右带[2290167,2290207]
+        check(v2[0] == 2290124 && v2[1] == 2290208, "85bp视野margin0 产物=全视野 " + v2[0] + "-" + v2[1]);
+        check(v2[2] == 2290124 && v2[3] == 42 && v2[6] == 0, "左端设计区=产物左缘内42bp（区内 out=0）");
+        check(v2[4] == 2290167 && v2[5] == 42 && v2[7] == 0, "右端设计区=产物右缘内42bp（区内 out=0）");
+        // 2c) 大视野理想档不变
         int[] v3 = Primer3Dialog.fillFromViewport(10000, 20000, 18, 200, 100, 200, 30);
-        check(v3[2] == 10001 && v3[3] == 101 && v3[4] == 19900 && v3[5] == 101
-                && v3[6] == 0 && v3[7] == 0, "大视野理想档不变（TestP7 断言保持）");
+        check(v3[2] == 10201 && v3[3] == 200 && v3[4] == 19601 && v3[5] == 200
+                && v3[6] == 0 && v3[7] == 0, "大视野区内理想档（左带[10201,200] 右带[19601,200]）");
 
         // ============ 3) hitByPosition 排序（tooltip 兜底修复核心） ============
         // 3a) x 重叠区：后加入者优先（lastFirst=true）——旧正序返回先加入的 P1_F 就是串显根因

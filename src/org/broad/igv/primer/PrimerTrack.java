@@ -949,6 +949,40 @@ public class PrimerTrack extends AbstractTrack {
     /** 拖拽参考线（竖线 + 坐标），由工具设置状态 */
     @Override
     public void overlay(RenderContext ctx, Rectangle rect) {
+        // v0.1.81：PCR 设计实时预览——产品区间(黄) + 两段设计区(蓝) 在轨内兜底绘制
+        if (PrimerEditTool.pcrPreviewActive() && ctx.getChr() != null
+                && ctx.getChr().equals(PrimerEditTool.pcrPreviewChr())) {
+            int[] r = PrimerEditTool.pcrPreviewRegions();
+            if (r != null) {
+                Graphics2D g2 = (Graphics2D) ctx.getGraphics();
+                int ps = ctx.bpToScreenPixel(r[0]), pe = ctx.bpToScreenPixel(r[1]);
+                int a0 = ctx.bpToScreenPixel(r[2]), a1 = ctx.bpToScreenPixel(r[3]);
+                int b0 = ctx.bpToScreenPixel(r[4]), b1 = ctx.bpToScreenPixel(r[5]);
+                g2.setColor(new Color(255, 205, 60, 38));
+                g2.fillRect(ps, rect.y, Math.max(1, pe - ps), rect.height);
+                g2.setColor(new Color(200, 120, 10, 255));
+                g2.setStroke(new BasicStroke(1f));
+                g2.drawLine(ps, rect.y, ps, rect.y + rect.height);
+                g2.drawLine(pe, rect.y, pe, rect.y + rect.height);
+                g2.setColor(new Color(60, 130, 255, 70));
+                g2.fillRect(a0, rect.y, Math.max(1, a1 - a0), rect.height);
+                g2.fillRect(b0, rect.y, Math.max(1, b1 - b0), rect.height);
+                g2.setColor(new Color(30, 90, 230, 230));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawLine(a0, rect.y, a0, rect.y + rect.height);
+                g2.drawLine(a1, rect.y, a1, rect.y + rect.height);
+                g2.drawLine(b0, rect.y, b0, rect.y + rect.height);
+                g2.drawLine(b1, rect.y, b1, rect.y + rect.height);
+                g2.setStroke(new BasicStroke(1f));
+                g2.setColor(new Color(20, 70, 200, 255));
+                g2.setFont(g2.getFont().deriveFont(10f));
+                g2.drawString(String.valueOf(r[2] + 1), a0 + 3, rect.y + 12);
+                g2.drawString(String.valueOf(r[3] + 1), a1 + 3, rect.y + 12);
+                g2.drawString(String.valueOf(r[4] + 1), b0 + 3, rect.y + 12);
+                g2.drawString(String.valueOf(r[5] + 1), b1 + 3, rect.y + 12);
+                return;
+            }
+        }
         int[] guides = PrimerEditTool.guidePositions(ctx.getChr());
         if (guides == null) return;
         // v0.1.48：全窗 ruler（贯穿所有面板）已在生效时不再重复画轨内局部红线，避免两条重叠显脏
@@ -1332,12 +1366,12 @@ public class PrimerTrack extends AbstractTrack {
         } catch (Throwable ignore) {}
         final String selTag = selNow != null
                 ? "（选区 " + (Integer.parseInt(selNow[1]) + 1) + "-" + (Integer.parseInt(selNow[2]) + 1)
-                + " → 填产物+上下游）"
+                + " → 填产物+设计区）"
                 : "（无选区 → 按当前视图）";
         // v0.1.70：primer3 设计 4 项（含选区提示）折叠为一个子菜单——原占 5 行顶层，
         // 且与导出/文件/保存类混在一起；同类项收拢后菜单体积小一半。
         JMenu p3Menu = new JMenu("primer3 设计 ▸" + (selNow != null ? "（有选区）" : "（无选区→视图）"));
-        JMenuItem selHint = new JMenuItem("Shift+拖动（或普通拖动）选区域 → 右键自动填充产物区间+上下游区");
+        JMenuItem selHint = new JMenuItem("Shift+拖动（或普通拖动）选区域 → 右键自动填充产物区间+设计区");
         selHint.setEnabled(false);
         p3Menu.add(selHint);
         p3Menu.addSeparator();
@@ -1357,7 +1391,11 @@ public class PrimerTrack extends AbstractTrack {
         menu.add(p3Menu);
 
         // v0.1.70：导出 6 项（本轨 3 + 全部 3）折叠为一个子菜单
-        JMenu expMenu = new JMenu("导出 ▸");
+        JMenu expMenu = new JMenu("导入导出 ▸");
+        expMenu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
+            public void run() { ExportUtils.importBED(); }
+        }));
+        expMenu.addSeparator();
         expMenu.add(item("本轨 BED（方向+颜色+测序长度）", new Runnable() {
             public void run() { ExportUtils.exportBED(PrimerTrack.this.group); }
         }));
@@ -1387,9 +1425,6 @@ public class PrimerTrack extends AbstractTrack {
         }));
         fileMenu.add(item("本轨另存为...", new Runnable() {
             public void run() { ExportUtils.saveTrackAs(PrimerTrack.this); }
-        }));
-        fileMenu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
-            public void run() { ExportUtils.importBED(); }
         }));
         fileMenu.add(item("恢复上次编辑（自动保存）", new Runnable() {
             public void run() {

@@ -276,6 +276,80 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
     }
 
+    // ---------- v0.1.81：PCR 设计实时预览（对话框改产物区/设计区 → IGV 面板同步高亮） ----------
+    private static String pcrPrevChr;
+    // {prodS0, prodE0, ba0, ba1, bb0, bb1}（0-based：产物 [S0,E0)，左设计区 [ba0,ba1)，右设计区 [bb0,bb1)）
+    private static int[] pcrPrevRegions;
+    private static boolean pcrPreviewOn = false;
+
+    /** 预览是否生效（同一染色体才允许画）。 */
+    public static boolean pcrPreviewActive() { return pcrPreviewOn && pcrPrevChr != null; }
+    public static String pcrPreviewChr() { return pcrPrevChr; }
+    /** {prodS0, prodE0, ba0, ba1, bb0, bb1}（0-based），未生效返回 null。 */
+    public static int[] pcrPreviewRegions() { return pcrPreviewOn ? pcrPrevRegions : null; }
+
+    /** 设置预览区域并刷新 IGV 面板（对话框字段变化时调用）。 */
+    public static void setPcrPreview(String chr, int prodS0, int prodE0, int ba0, int ba1, int bb0, int bb1) {
+        pcrPrevChr = chr;
+        pcrPrevRegions = new int[]{prodS0, prodE0, ba0, ba1, bb0, bb1};
+        pcrPreviewOn = true;
+        refreshPcrPreview();
+    }
+
+    /** 清除预览（对话框关闭或字段无效时调用）。 */
+    public static void clearPcrPreview() {
+        pcrPreviewOn = false;
+        pcrPrevChr = null;
+        pcrPrevRegions = null;
+        if (rulerGlass != null) { rulerGlass.pvProdXs = null; rulerGlass.repaint(); }
+        repaintDataPanels();
+    }
+
+    private static void refreshPcrPreview() {
+        if (rulerGlass == null) setupGlass();
+        if (rulerGlass == null) { repaintDataPanels(); return; }
+        if (!pcrPreviewOn || pcrPrevChr == null || pcrPrevRegions == null) {
+            rulerGlass.pvProdXs = null; rulerGlass.repaint(); repaintDataPanels(); return;
+        }
+        try {
+            org.broad.igv.ui.panel.ReferenceFrame frame = IGV.getInstance().getSession().getReferenceFrame();
+            if (frame == null || !frame.getChrName().equals(pcrPrevChr)) {
+                rulerGlass.pvProdXs = null; rulerGlass.repaint(); repaintDataPanels(); return;
+            }
+            java.util.List<DataPanel> panels = findDataPanels();
+            if (panels.isEmpty()) { rulerGlass.pvProdXs = null; rulerGlass.repaint(); return; }
+            DataPanel dp = panels.get(0);
+            // 纵向范围 = 所有数据面板可见区并集（与 updateRuler 同款）
+            int top = Integer.MAX_VALUE, bot = Integer.MIN_VALUE; boolean found = false;
+            for (DataPanel cand : panels) {
+                java.awt.Rectangle vr = cand.getVisibleRect();
+                if (vr.width <= 0 || vr.height <= 0) continue;
+                java.awt.Point t = SwingUtilities.convertPoint(cand, vr.x, vr.y, rulerGlass);
+                top = Math.min(top, t.y); bot = Math.max(bot, t.y + vr.height); found = true;
+            }
+            if (!found) { java.awt.Point pT = SwingUtilities.convertPoint(dp, 0, 0, rulerGlass); java.awt.Point pB = SwingUtilities.convertPoint(dp, 0, dp.getHeight(), rulerGlass); top = pT.y; bot = pB.y; }
+            int[] r = pcrPrevRegions;
+            int[] px = new int[]{
+                    (int) Math.round(frame.getScreenPosition(r[0])), (int) Math.round(frame.getScreenPosition(r[1])),
+                    (int) Math.round(frame.getScreenPosition(r[2])), (int) Math.round(frame.getScreenPosition(r[3])),
+                    (int) Math.round(frame.getScreenPosition(r[4])), (int) Math.round(frame.getScreenPosition(r[5])) };
+            java.awt.Point[] q = new java.awt.Point[6];
+            for (int k = 0; k < 6; k++) q[k] = SwingUtilities.convertPoint(dp, px[k], 0, rulerGlass);
+            rulerGlass.pvProdXs = new int[]{ q[0].x, q[1].x };
+            rulerGlass.pvBandXs = new int[]{ q[2].x, q[3].x, q[4].x, q[5].x };
+            rulerGlass.pvYTop = top; rulerGlass.pvYBot = bot;
+            rulerGlass.pvProdBps = new int[]{ r[0], r[1] };
+            rulerGlass.pvBandBps = new int[]{ r[2], r[3], r[4], r[5] };
+            rulerGlass.setVisible(true);
+            rulerGlass.repaint();
+        } catch (Exception ignore) { }
+        repaintDataPanels();
+    }
+
+    private static void repaintDataPanels() {
+        for (DataPanel dp : findDataPanels()) dp.repaint();
+    }
+
     // ---------- 键盘快捷键：选中引物后方向键精确移动（避免鼠标拖动乱跑） ----------
     // v0.1.51：两条分发路径并用。原先只有全局 AWTEventListener，一旦焦点落在
     //   会自己吞掉方向键的组件上（顶栏搜索框/JTable/JTree 等有自身绑定），AKW listener 虽收到事件
