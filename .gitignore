@@ -8,6 +8,10 @@ _test_igv.jar.*
 _igv_base.jar
 igv_patched.jar
 *.bak-*
+# 注入目标 jar 及其清理备份（由用户 IGV 派生，~28MB，绝不入库）
+_inject_target.jar
+_inject_target*.jar
+_inject_target.bak*.jar
 
 # Build / install logs
 install.log

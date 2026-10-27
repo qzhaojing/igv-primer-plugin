@@ -103,6 +103,16 @@ public class TailLibrary {
 
     /** 端槽位编号（TailManagerDialog 右侧四个文本框）。 */
     public static final int SLOT_F = 0, SLOT_R = 1, SLOT_R1 = 2, SLOT_R2 = 3;
+
+    /**
+     * v0.1.79：端槽位模式。F/R（链方向）与 R1/R2（测序读段编号）是**两个正交维度**，
+     * 不能互相等同，也不能同时生效——F 端既可能是 R1 也可能是 R2（取决于建库方案：
+     * 常规 PCR / 克隆只谈 F、R；双端测序才分 R1、R2，且谁对应正链看试剂盒设计）。
+     * 因此做成两种互斥模式，一次只用一种，另一组的值保留但不起作用。
+     */
+    public static final int MODE_STRAND = 0;   // 按链方向：F 端（+ 链）/ R 端（- 链）
+    public static final int MODE_ROLE = 1;     // 按测序读段：R1 端 / R2 端
+    private static int slotMode = MODE_STRAND;
     /** 槽位显示名（预览 / header 来源标注用）。 */
     public static final String[] SLOT_NAMES = {"F端", "R端", "R1端", "R2端"};
     private static File currentFile = null;   // 当前库文件路径（保存到 / 另存为 用）
@@ -369,28 +379,61 @@ public class TailLibrary {
         return !slotF.isEmpty() || !slotR.isEmpty() || !slotR1.isEmpty() || !slotR2.isEmpty();
     }
 
-    /** 按引物 role（R1/R2）匹配的槽序列；不匹配或未设返回空串。 */
+    /** 按引物 role（R1/R2）取槽序列（仅供界面显示；是否生效取决于当前模式）。 */
     public static synchronized String slotSeqForRole(String role) {
         if ("R1".equals(role) && !slotR1.isEmpty()) return slotR1;
         if ("R2".equals(role) && !slotR2.isEmpty()) return slotR2;
         return "";
     }
 
-    /** 按引物 strand（F/R）匹配的槽序列；不匹配或未设返回空串。 */
+    /** 按引物 strand（F/R）取槽序列（仅供界面显示；是否生效取决于当前模式）。 */
     public static synchronized String slotSeqForStrand(char strand) {
         if (strand == '+' && !slotF.isEmpty()) return slotF;
         if (strand == '-' && !slotR.isEmpty()) return slotR;
         return "";
     }
 
-    /** 某条引物命中的槽位编号（-1 = 未命中任何槽）。R1/R2 优先于 F/R。 */
+    // ---------- v0.1.79 槽位模式（F/R 与 R1/R2 二选一）----------
+
+    /** 当前模式：{@link #MODE_STRAND} 或 {@link #MODE_ROLE}。 */
+    public static synchronized int slotMode() {
+        return slotMode;
+    }
+
+    /** 切换模式（只接受 MODE_STRAND / MODE_ROLE，其余按 MODE_STRAND 处理）。 */
+    public static synchronized void setSlotMode(int m) {
+        slotMode = (m == MODE_ROLE) ? MODE_ROLE : MODE_STRAND;
+    }
+
+    /** 当前模式下真正生效的两个槽位。 */
+    public static synchronized int[] activeSlots() {
+        return slotMode == MODE_ROLE ? new int[]{SLOT_R1, SLOT_R2} : new int[]{SLOT_F, SLOT_R};
+    }
+
+    /** 模式显示名。 */
+    public static synchronized String modeLabel() {
+        return slotMode == MODE_ROLE ? "按测序读段（R1 / R2）" : "按链方向（F / R）";
+    }
+
+    /**
+     * 某条引物在当前模式下命中的槽位（返回槽位编号；-1 = 未命中，调用方继续回落到库条目默认）。
+     * 只按当前模式的维度匹配，绝不跨维度（“F 就是 R1”这种假设不成立）。
+     *
+     * <p><b>注意「空槽 = 未命中」</b>：链方向模式下每条引物都能对上一个槽，若空槽也算命中，
+     * 库条目默认（统一默认 / F、R 向默认）就永远轮不上——这是 v0.1.79 重写时踩的坑，
+     * 现象是「在库里点了设为统一默认，导出却不附加」。
+     */
     public static synchronized int slotHit(Primer p) {
         if (p == null) return -1;
-        if ("R1".equals(p.role) && !slotR1.isEmpty()) return SLOT_R1;
-        if ("R2".equals(p.role) && !slotR2.isEmpty()) return SLOT_R2;
-        if (p.strand == '+' && !slotF.isEmpty()) return SLOT_F;
-        if (p.strand == '-' && !slotR.isEmpty()) return SLOT_R;
-        return -1;
+        int s = -1;
+        if (slotMode == MODE_ROLE) {
+            if ("R1".equals(p.role)) s = SLOT_R1;
+            else if ("R2".equals(p.role)) s = SLOT_R2;
+        } else {
+            s = (p.strand == '+') ? SLOT_F : SLOT_R;
+        }
+        if (s < 0 || slotSeq(s).isEmpty()) return -1;   // 空槽视为未命中
+        return s;
     }
 
     private static String slotField(int slot) {
@@ -443,8 +486,8 @@ public class TailLibrary {
             if (t != null && t.seq != null) return t.seq;   // 显式指定 → 不再按 apply 过滤方向
         }
         int slot = slotHit(p);
-        if (slot >= 0) return slotSeq(slot);
-        return seqFor(p.strand);
+        if (slot >= 0 && !slotSeq(slot).isEmpty()) return slotSeq(slot);
+        return seqFor(p.strand);   // 空槽 / 未命中 → 回落库条目默认
     }
 
     /** 某条引物附加来源的名称（写 FASTA header / 界面显示用）；无附加返回 null。 */
@@ -457,7 +500,9 @@ public class TailLibrary {
             if (get(nm) != null) return nm;
         }
         int slot = slotHit(p);
-        if (slot >= 0) return SLOT_NAMES[slot] + ":" + shortSeq8(slotSeq(slot));
+        if (slot >= 0 && !slotSeq(slot).isEmpty()) {
+            return SLOT_NAMES[slot] + ":" + shortSeq8(slotSeq(slot));
+        }
         return seqFor(p.strand).isEmpty() ? null : effectiveDefaultName(p.strand);
     }
 
@@ -471,7 +516,7 @@ public class TailLibrary {
             if (get(nm) != null) return "本条";
         }
         int slot = slotHit(p);
-        if (slot >= 0) return SLOT_NAMES[slot] + "槽";
+        if (slot >= 0 && !slotSeq(slot).isEmpty()) return SLOT_NAMES[slot] + "槽";
         if (seqFor(p.strand).isEmpty()) return "无";
         return defaultName(p.strand) != null ? ("方向默认" + (p.strand == '+' ? "(F)" : "(R)")) : "全局";
     }
@@ -511,6 +556,7 @@ public class TailLibrary {
     public static synchronized void loadDefaults() {
         entries.clear();
         extraCats.clear();
+        slotMode = MODE_STRAND;
         active = null;
         defaultF = null;
         defaultR = null;
@@ -616,6 +662,7 @@ public class TailLibrary {
             root.setAttribute("slotR", slotR);
             root.setAttribute("slotR1", slotR1);
             root.setAttribute("slotR2", slotR2);
+            root.setAttribute("slotMode", String.valueOf(slotMode));
             doc.appendChild(root);
             for (Tail t : entries) {
                 Element e = doc.createElement("tail");
@@ -717,6 +764,12 @@ public class TailLibrary {
             slotR = sanitize(root.getAttribute("slotR"));
             slotR1 = sanitize(root.getAttribute("slotR1"));
             slotR2 = sanitize(root.getAttribute("slotR2"));
+            // v0.1.79：槽位模式。旧库无该属性时自动推断：R1/R2 有值而 F/R 为空 → 读段模式
+            String sm = root.getAttribute("slotMode");
+            if (sm != null && sm.trim().equals("1")) slotMode = MODE_ROLE;
+            else if (sm != null && sm.trim().equals("0")) slotMode = MODE_STRAND;
+            else slotMode = (!slotR1.isEmpty() || !slotR2.isEmpty())
+                    && slotF.isEmpty() && slotR.isEmpty() ? MODE_ROLE : MODE_STRAND;
             return true;
         } catch (Exception ex) {
             return false;

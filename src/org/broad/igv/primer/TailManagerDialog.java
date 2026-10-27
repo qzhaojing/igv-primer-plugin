@@ -10,6 +10,7 @@ import javax.swing.JFileChooser;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JRadioButton;
 import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -48,6 +49,9 @@ public class TailManagerDialog extends JDialog {
 
     private javax.swing.JTree tree;   // v0.1.76：左侧类别树（替代原平铺列表）
     private final JTextField[] slotF = new JTextField[4];
+    // v0.1.79：端命名方式二选一（F/R 按链方向，R1/R2 按测序读段）
+    private final JRadioButton rbStrand = new JRadioButton("按链方向：F 端 / R 端");
+    private final JRadioButton rbRole = new JRadioButton("按测序读段：R1 端 / R2 端");
     private final JTextArea structA = new JTextArea(6, 30);
     private final JLabel stateL = new JLabel(" ");
 
@@ -66,8 +70,9 @@ public class TailManagerDialog extends JDialog {
         JPanel root = new JPanel(new BorderLayout(8, 8));
         root.setBorder(BorderFactory.createEmptyBorder(8, 8, 8, 8));
 
-        root.add(new JLabel("<html><b>5′ 附加序列</b>：导出 FASTA 时拼到引物 5′ 端。"
-                + "优先级：<font color='#B71C1C'>逐条（右键引物） &gt; R1/R2 端 &gt; F/R 端 &gt; 库条目默认</font>。</html>"),
+        root.add(new JLabel("<html><b>5′ 附加序列</b>：导出 FASTA 时拼到引物 5′ 端。优先级："
+                + "<font color='#B71C1C'>逐条（右键引物） &gt; 端槽位（F/R 与 R1/R2 二选一） &gt; 库条目默认"
+                + "</font>。</html>"),
                 BorderLayout.NORTH);
 
         root.add(listPanel(), BorderLayout.WEST);
@@ -244,16 +249,33 @@ public class TailManagerDialog extends JDialog {
         c.insets = new Insets(3, 4, 3, 4);
         c.anchor = GridBagConstraints.WEST;
 
+        // v0.1.79：F/R（链方向）与 R1/R2（测序读段）是两个独立维度，F 端可能是 R1 也可能是 R2，
+        // 不能互相等同、也不能同时生效 → 二选一模式；未选中的那组置灰但保留已存值。
+        c.gridx = 0; c.gridy = 0; c.gridwidth = 5; c.weightx = 1;
+        p.add(new JLabel("<html><b>端命名方式（二选一）：</b> 常规 PCR / 克隆用「F / R」；"
+                + "双端测序用「R1 / R2」。两者是不同维度，不能混用。</html>"), c);
+        c.gridwidth = 1;
+        c.gridy = 1; c.gridx = 0;
+        JPanel modeP = new JPanel(new FlowLayout(FlowLayout.LEFT, 6, 2));
+        modeP.add(rbStrand);
+        modeP.add(rbRole);
+        c.gridwidth = 5;
+        p.add(modeP, c);
+        c.gridwidth = 1;
+        javax.swing.ButtonGroup bg = new javax.swing.ButtonGroup();   // 互斥：一次只能选一种
+        bg.add(rbStrand);
+        bg.add(rbRole);
+
         String[] labels = {
-                "F 端附加序列（+ 链引物）：",
-                "R 端附加序列（- 链引物）：",
-                "R1 端附加序列（read1，优先于 F 端）：",
-                "R2 端附加序列（read2，优先于 R 端）："
+                "F 端（+ 链引物）：",
+                "R 端（- 链引物）：",
+                "R1 端（Read1 侧引物）：",
+                "R2 端（Read2 侧引物）："
         };
         int[] slots = {TailLibrary.SLOT_F, TailLibrary.SLOT_R, TailLibrary.SLOT_R1, TailLibrary.SLOT_R2};
         for (int i = 0; i < 4; i++) {
             final int slot = slots[i];
-            c.gridx = 0; c.gridy = i; c.weightx = 0;
+            c.gridx = 0; c.gridy = i + 2; c.weightx = 0;
             p.add(new JLabel(labels[i]), c);
             c.gridx = 1; c.weightx = 1; c.fill = GridBagConstraints.HORIZONTAL;
             slotF[i] = new JTextField(24);
@@ -272,12 +294,17 @@ public class TailManagerDialog extends JDialog {
                 public void run() { clearSlot(slot); }
             }), c);
         }
+        ActionListener modeSync = new ActionListener() {
+            public void actionPerformed(ActionEvent e) { syncMode(); }
+        };
+        rbStrand.addActionListener(modeSync);
+        rbRole.addActionListener(modeSync);
 
-        // 引物结构预览
-        c.gridx = 0; c.gridy = 4; c.gridwidth = 3; c.weightx = 1;
+        // 引物结构预览（行号要跟着模式行下移：模式标题 0、单选 1、四个端槽 2..5）
+        c.gridx = 0; c.gridy = 6; c.gridwidth = 3; c.weightx = 1;
         c.fill = GridBagConstraints.HORIZONTAL;
         p.add(new JLabel("引物结构（以上设置生效后，实际导出的样子）："), c);
-        c.gridy = 5; c.weighty = 1; c.fill = GridBagConstraints.BOTH;
+        c.gridy = 7; c.weighty = 1; c.fill = GridBagConstraints.BOTH;
         structA.setEditable(false);
         structA.setFont(new java.awt.Font("Monospaced", java.awt.Font.PLAIN, 12));
         structA.setLineWrap(true);
@@ -285,7 +312,7 @@ public class TailManagerDialog extends JDialog {
         JScrollPane sp = new JScrollPane(structA);
         sp.setPreferredSize(new Dimension(420, 130));
         p.add(sp, c);
-        c.gridy = 6; c.weighty = 0; c.fill = GridBagConstraints.HORIZONTAL;
+        c.gridy = 8; c.weighty = 0; c.fill = GridBagConstraints.HORIZONTAL;
         p.add(stateL, c);
         return p;
     }
@@ -329,7 +356,22 @@ public class TailManagerDialog extends JDialog {
         slotF[1].setText(TailLibrary.slotSeq(TailLibrary.SLOT_R));
         slotF[2].setText(TailLibrary.slotSeq(TailLibrary.SLOT_R1));
         slotF[3].setText(TailLibrary.slotSeq(TailLibrary.SLOT_R2));
+        int m = TailLibrary.slotMode();
+        rbRole.setSelected(m == TailLibrary.MODE_ROLE);
+        rbStrand.setSelected(m != TailLibrary.MODE_ROLE);
+        syncMode();   // 顺带刷新可用状态与结构预览
+    }
+
+    /** v0.1.79：切换端命名方式——只让当前模式的两个框可用（另一组保留已存值，只是不生效）。 */
+    private void syncMode() {
+        TailLibrary.setSlotMode(rbRole.isSelected() ? TailLibrary.MODE_ROLE : TailLibrary.MODE_STRAND);
+        TailLibrary.save();
+        int[] act = TailLibrary.activeSlots();
+        for (int i = 0; i < slotF.length; i++) {
+            slotF[i].setEnabled(i == act[0] || i == act[1]);
+        }
         updateStructure();
+        PrimerStore.refresh();
     }
 
     /** 本行文本框（索引 0..3 对应 SLOT_F/R/R1/R2）。 */
@@ -409,26 +451,31 @@ public class TailManagerDialog extends JDialog {
      */
     private void updateStructure() {
         StringBuilder sb = new StringBuilder();
-        sb.append(structLine("F 端（+ 链引物，role=R1）", TailLibrary.SLOT_R1, TailLibrary.SLOT_F, "R1", "F"));
-        sb.append("\n");
-        sb.append(structLine("R 端（- 链引物，role=R2）", TailLibrary.SLOT_R2, TailLibrary.SLOT_R, "R2", "R"));
-        sb.append("\n说明：这里只画结构，不会自动加任何序列；你在上面四个框里填了才会附加。\n");
-        sb.append("优先级：逐条（右键引物） &gt; R1/R2 端 &gt; F/R 端 &gt; 库条目默认（")
+        // v0.1.79：按当前模式只显示对应的两端——绝不写出「F 端（role=R1）」这种把两个维度绑死的文案
+        if (TailLibrary.slotMode() == TailLibrary.MODE_ROLE) {
+            sb.append(structLine("R1 端（Read1 侧引物）", TailLibrary.SLOT_R1));
+            sb.append("\n");
+            sb.append(structLine("R2 端（Read2 侧引物）", TailLibrary.SLOT_R2));
+        } else {
+            sb.append(structLine("F 端（+ 链引物）", TailLibrary.SLOT_F));
+            sb.append("\n");
+            sb.append(structLine("R 端（- 链引物）", TailLibrary.SLOT_R));
+        }
+        sb.append("\n说明：这里只画结构，不会自动加任何序列；你在上面填了才会附加。\n");
+        sb.append("当前端命名：").append(TailLibrary.modeLabel())
+                .append("。F/R 与 R1/R2 是不同维度（F 端可能是 R1 也可能是 R2），一次只用一种。\n");
+        sb.append("优先级：逐条（右键引物） &gt; 端槽位 &gt; 库条目默认（")
                 .append(TailLibrary.summaryLine()).append("）。");
         structA.setText(sb.toString());
         structA.setCaretPosition(0);
         refreshState();
     }
 
-    /** 单独一端的预览行：命中 role 槽优先，其次 strand 槽；都没设 → 未附加。 */
-    private String structLine(String label, int roleSlot, int strandSlot, String roleName, String strandName) {
-        String s = TailLibrary.slotSeq(roleSlot);
-        String src = roleName + "端";
-        if (s.isEmpty()) {
-            s = TailLibrary.slotSeq(strandSlot);
-            src = strandName + "端";
-        }
-        String head = s.isEmpty() ? "" : "[" + s + "] (" + src + "，" + s.length() + "nt) - ";
+    /** 单独一端的预览行：该端未设 → 明确标注未附加。 */
+    private String structLine(String label, int slot) {
+        String s = TailLibrary.slotSeq(slot);
+        String head = s.isEmpty() ? ""
+                : "[" + s + "] (" + TailLibrary.SLOT_NAMES[slot] + "，" + s.length() + "nt) - ";
         return label + "：\n    5′- " + head + "[你的引物序列] -3′"
                 + (s.isEmpty() ? "　（未附加，原样导出）" : "");
     }
@@ -436,8 +483,9 @@ public class TailManagerDialog extends JDialog {
     private void refreshState() {
         File f = TailLibrary.currentFile();
         String cur = TailLibrary.summaryLine();
-        stateL.setText("<html>当前统一/方向条目默认：<b>" + cur + "</b>　端槽位已设："
-                + slotNames() + "<br>库文件：" + (f == null ? "（未保存）" : f.getAbsolutePath())
+        stateL.setText("<html>当前端命名：<b>" + TailLibrary.modeLabel() + "</b>　端槽位已设："
+                + slotNames() + "　库条目默认：" + cur
+                + "<br>库文件：" + (f == null ? "（未保存）" : f.getAbsolutePath())
                 + "</html>");
     }
 

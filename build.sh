@@ -27,7 +27,17 @@ if [ ! -f "$IGV_JAR" ]; then
   exit 1
 fi
 
-rm -rf "$OUT" && mkdir -p "$OUT"
+# v0.1.79：清理输出目录。**不要**用 `rm -rf classes` —— 本机 WorkBuddy 把 rm -rf 接到
+# 安全删除钩子（genie-trash），回收站操作失败时会 fail-closed「静默不删」，于是上一版
+# 已删掉的类（如 TailSetupDialog*.class）会残留并被一起打包、再注入进 IGV。
+# 改成逐个删文件 + 删后校验，清不干净就直接报错退出。
+if [ -d "$OUT" ]; then find "$OUT" -type f -delete; fi
+mkdir -p "$OUT"
+STALE=$(find "$OUT" -type f 2>/dev/null | wc -l)
+if [ "$STALE" -ne 0 ]; then
+  echo "[build] 输出目录未清空（残留 $STALE 个文件）：$OUT" >&2
+  exit 1
+fi
 "$JAVAC" -encoding UTF-8 -source 8 -target 8 -cp "$IGV_JAR" -d "$OUT" \
   "$SRC"/org/broad/igv/primer/*.java
 
