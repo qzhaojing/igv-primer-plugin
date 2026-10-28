@@ -277,10 +277,15 @@ public class PrimerEditTool extends AbstractDataPanelTool {
     }
 
     // ---------- v0.1.81：PCR 设计实时预览（对话框改产物区/设计区 → IGV 面板同步高亮） ----------
+    // v0.1.82：像素坐标不再缓存（旧法在缩放/平移后高亮与 bp 脱节）——绘制时经
+    //   computePcrPreviewCoords() 从 bp 按当前视图实时换算；另用 150ms 轻量 Swing Timer
+    //   监视视图变化（缩放/平移/滚动/布局），坐标变了才重绘，空闲时一次比较即返回。
     private static String pcrPrevChr;
     // {prodS0, prodE0, ba0, ba1, bb0, bb1}（0-based：产物 [S0,E0)，左设计区 [ba0,ba1)，右设计区 [bb0,bb1)）
     private static int[] pcrPrevRegions;
     private static boolean pcrPreviewOn = false;
+    private static javax.swing.Timer pcrViewSyncTimer;   // 视图同步节拍（常驻，tick 极轻）
+    private static int[] lastPcrCoords;                  // 上次应用的坐标（变更检测，免无谓重绘）
 
     /** 预览是否生效（同一染色体才允许画）。 */
     public static boolean pcrPreviewActive() { return pcrPreviewOn && pcrPrevChr != null; }
@@ -293,6 +298,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         pcrPrevChr = chr;
         pcrPrevRegions = new int[]{prodS0, prodE0, ba0, ba1, bb0, bb1};
         pcrPreviewOn = true;
+        startViewSyncTimer();
         refreshPcrPreview();
     }
 
@@ -301,23 +307,60 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         pcrPreviewOn = false;
         pcrPrevChr = null;
         pcrPrevRegions = null;
-        if (rulerGlass != null) { rulerGlass.pvProdXs = null; rulerGlass.repaint(); }
+        lastPcrCoords = null;
+        if (rulerGlass != null) rulerGlass.repaint();   // 立即抹掉旧高亮
         repaintDataPanels();
+    }
+
+    /** 视图同步节拍（常驻 150ms，EDT）：空闲时仅做两次布尔判断即返回，开销可忽略。 */
+    private static void startViewSyncTimer() {
+        if (pcrViewSyncTimer == null) {
+            pcrViewSyncTimer = new javax.swing.Timer(150, new java.awt.event.ActionListener() {
+                public void actionPerformed(java.awt.event.ActionEvent e) {
+                    syncOnViewChange();
+                }
+            });
+            pcrViewSyncTimer.setRepeats(true);
+        }
+        pcrViewSyncTimer.start();
+    }
+
+    /** 缩放/平移/滚动/布局变化检测：坐标与上次不同才重绘（glass 高亮 + 轨内 overlay）。 */
+    private static void syncOnViewChange() {
+        if (pcrPreviewOn) {
+            int[] c = computePcrPreviewCoords();
+            if (!java.util.Arrays.equals(c, lastPcrCoords)) {
+                lastPcrCoords = c;
+                if (rulerGlass != null) rulerGlass.repaint();
+                repaintDataPanels();
+            }
+        } else {
+            syncSelectionRuler();   // 选中/编辑高亮同 bug 类：视图变化后也要跟随
+        }
     }
 
     private static void refreshPcrPreview() {
         if (rulerGlass == null) setupGlass();
-        if (rulerGlass == null) { repaintDataPanels(); return; }
-        if (!pcrPreviewOn || pcrPrevChr == null || pcrPrevRegions == null) {
-            rulerGlass.pvProdXs = null; rulerGlass.repaint(); repaintDataPanels(); return;
-        }
+        int[] c = computePcrPreviewCoords();
+        if (java.util.Arrays.equals(c, lastPcrCoords)) return;
+        lastPcrCoords = c;
+        if (rulerGlass != null) { rulerGlass.setVisible(true); rulerGlass.repaint(); }
+        repaintDataPanels();
+    }
+
+    /**
+     * v0.1.82：按当前视图把预览 bp 实时换算成 glass 坐标（每次绘制/节拍调用，绝不缓存）。
+     * @return null（未生效/染色体不符/无面板/headless）或
+     *         {prodX1, prodX2, bandAX1, bandAX2, bandBX1, bandBX2, yTop, yBot}（glass 坐标，x 未排序）
+     */
+    static int[] computePcrPreviewCoords() {
+        if (!pcrPreviewOn || pcrPrevChr == null || pcrPrevRegions == null) return null;
         try {
+            if (rulerGlass == null) return null;
             org.broad.igv.ui.panel.ReferenceFrame frame = IGV.getInstance().getSession().getReferenceFrame();
-            if (frame == null || !frame.getChrName().equals(pcrPrevChr)) {
-                rulerGlass.pvProdXs = null; rulerGlass.repaint(); repaintDataPanels(); return;
-            }
+            if (frame == null || !frame.getChrName().equals(pcrPrevChr)) return null;
             java.util.List<DataPanel> panels = findDataPanels();
-            if (panels.isEmpty()) { rulerGlass.pvProdXs = null; rulerGlass.repaint(); return; }
+            if (panels.isEmpty()) return null;
             DataPanel dp = panels.get(0);
             // 纵向范围 = 所有数据面板可见区并集（与 updateRuler 同款）
             int top = Integer.MAX_VALUE, bot = Integer.MIN_VALUE; boolean found = false;
@@ -333,17 +376,53 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                     (int) Math.round(frame.getScreenPosition(r[0])), (int) Math.round(frame.getScreenPosition(r[1])),
                     (int) Math.round(frame.getScreenPosition(r[2])), (int) Math.round(frame.getScreenPosition(r[3])),
                     (int) Math.round(frame.getScreenPosition(r[4])), (int) Math.round(frame.getScreenPosition(r[5])) };
-            java.awt.Point[] q = new java.awt.Point[6];
-            for (int k = 0; k < 6; k++) q[k] = SwingUtilities.convertPoint(dp, px[k], 0, rulerGlass);
-            rulerGlass.pvProdXs = new int[]{ q[0].x, q[1].x };
-            rulerGlass.pvBandXs = new int[]{ q[2].x, q[3].x, q[4].x, q[5].x };
-            rulerGlass.pvYTop = top; rulerGlass.pvYBot = bot;
-            rulerGlass.pvProdBps = new int[]{ r[0], r[1] };
-            rulerGlass.pvBandBps = new int[]{ r[2], r[3], r[4], r[5] };
-            rulerGlass.setVisible(true);
+            int[] xs = new int[6];
+            for (int k = 0; k < 6; k++) xs[k] = SwingUtilities.convertPoint(dp, px[k], 0, rulerGlass).x;
+            return new int[]{ xs[0], xs[1], xs[2], xs[3], xs[4], xs[5], top, bot };
+        } catch (Exception ignore) { return null; }
+    }
+
+    /** 供 RulerGlass 绘制调用：预览绘制坐标（x 已 min/max 排序）或 null。 */
+    public static int[] pcrPreviewPaintCoords() {
+        int[] c = computePcrPreviewCoords();
+        if (c == null) return null;
+        return new int[]{
+                Math.min(c[0], c[1]), Math.max(c[0], c[1]),
+                Math.min(c[2], c[3]), Math.max(c[2], c[3]),
+                Math.min(c[4], c[5]), Math.max(c[4], c[5]),
+                c[6], c[7] };
+    }
+
+    /** v0.1.82：选中/编辑高亮（rulerGlass.xs，bp 记在 guideBps）也随视图实时重算位置。 */
+    private static void syncSelectionRuler() {
+        if (rulerGlass == null || !rulerGlass.active
+                || rulerGlass.guideBps == null || rulerGlass.guideBps.length < 2) return;
+        try {
+            org.broad.igv.ui.panel.ReferenceFrame frame = IGV.getInstance().getSession().getReferenceFrame();
+            java.util.List<DataPanel> panels = findDataPanels();
+            if (frame == null || panels.isEmpty()) return;
+            DataPanel dp = panels.get(0);
+            int[] gb = rulerGlass.guideBps;
+            int[] nx = new int[gb.length];
+            for (int k = 0; k < gb.length; k++)
+                nx[k] = SwingUtilities.convertPoint(dp,
+                        (int) Math.round(frame.getScreenPosition(gb[k])), 0, rulerGlass).x;
+            int top = Integer.MAX_VALUE, bot = Integer.MIN_VALUE; boolean found = false;
+            for (DataPanel cand : panels) {
+                java.awt.Rectangle vr = cand.getVisibleRect();
+                if (vr.width <= 0 || vr.height <= 0) continue;
+                java.awt.Point t = SwingUtilities.convertPoint(cand, vr.x, vr.y, rulerGlass);
+                top = Math.min(top, t.y); bot = Math.max(bot, t.y + vr.height); found = true;
+            }
+            if (!found) return;
+            boolean changed = rulerGlass.yTop != top || rulerGlass.yBot != bot || rulerGlass.xs == null;
+            for (int k = 0; k < gb.length && !changed; k++)
+                changed = rulerGlass.xs == null || rulerGlass.xs[k] != nx[k];
+            if (!changed) return;
+            rulerGlass.xs = nx;
+            rulerGlass.yTop = top; rulerGlass.yBot = bot;
             rulerGlass.repaint();
         } catch (Exception ignore) { }
-        repaintDataPanels();
     }
 
     private static void repaintDataPanels() {
