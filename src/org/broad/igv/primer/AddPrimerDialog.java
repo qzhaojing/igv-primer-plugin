@@ -28,9 +28,16 @@ public class AddPrimerDialog {
         return null;
     }
 
-    public static void show(final int bp, final Primer existing, final String group) {
+    /**
+     * v0.1.94：返回 boolean——true=用户点了「添加/更新」，false=取消或按 Esc 关闭。
+     * 旧调用方（忽略返回值）不受影响。
+     * v0.1.94：对话框内按 Esc = 取消关闭（此前 Esc 落在模态框上无任何反应，
+     * 而 N 布防的全局 Esc 监听因焦点在对话框被跳过 → 老板实测"esc 也没用"）。
+     */
+    public static boolean show(final int bp, final Primer existing, final String group) {
         Frame owner = IGV.getMainFrame();
         final JDialog dlg = new JDialog(owner, existing == null ? "添加引物" : "编辑引物 " + existing.name, true);
+        final boolean[] confirmed = {false};   // v0.1.94：给 show() 的返回值用
         dlg.setLayout(new BorderLayout(6, 6));
 
         // ===== 基本信息 =====
@@ -392,6 +399,7 @@ public class AddPrimerDialog {
                         // v0.1.30：编辑保存时不再自动跑 O(n²) 二聚体评估
                     }
                     PrimerStore.refresh();
+                    confirmed[0] = true;   // v0.1.94：告知 placeNewPrimer 是确认而非取消
                     dlg.dispose();
                 } catch (NumberFormatException nfe) {
                     JOptionPane.showMessageDialog(dlg, "坐标/数字格式错误");
@@ -426,6 +434,13 @@ public class AddPrimerDialog {
         dlg.pack();
         dlg.setLocationRelativeTo(owner);
 
+        // v0.1.94：Esc = 取消关闭（模态框内键盘焦点在对话框，N 布防的全局 Esc 监听管不到这里）
+        dlg.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW)
+                .put(KeyStroke.getKeyStroke(java.awt.event.KeyEvent.VK_ESCAPE, 0), "primer.dlg.cancel");
+        dlg.getRootPane().getActionMap().put("primer.dlg.cancel", new AbstractAction() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { dlg.dispose(); }
+        });
+
         // v0.1.39：若配置了 MFEprimer，后台算一次全体系二聚体（不卡 UI），完成后刷新预览
         if (PrimerStore.mfeExePath != null && !PrimerStore.mfeExePath.trim().isEmpty()) {
             final java.util.List<Primer> snap = PrimerStore.getPrimers();
@@ -439,6 +454,7 @@ public class AddPrimerDialog {
         }
 
         dlg.setVisible(true);
+        return confirmed[0];   // v0.1.94
     }
 
     /** 双击空白快速添加：默认长度/方向/角色 */

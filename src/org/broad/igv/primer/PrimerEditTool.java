@@ -453,7 +453,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         lastMoveKeyCode = keyCode;
         lastMoveKeyAt = now;
 
-        if (!PrimerEditTool.inEditMode()) return false;
+        if (!PrimerEditTool.inEditMode() && PrimerStore.selected == null) return false;
+        // v0.1.93：方向键不再强制编辑模式——普通模式选中引物即可移动（帮助面板「无需进入编辑模式」兑现）
         Primer sel = PrimerStore.selected;
         if (sel == null) return false;
         if (focusInOtherWindow()) return false;   // 焦点在别处窗口（如引物编辑对话框）不响应
@@ -938,6 +939,21 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             }
 
             @Override
+            public void mouseClicked(java.awt.event.MouseEvent e) {
+                // v0.1.93：普通模式双击引物 = 直接编辑（此前只有编辑模式有此功能，帮助面板宣称却未兑现）
+                if (inEditMode()) return;
+                if (!SwingUtilities.isLeftMouseButton(e) || e.getClickCount() != 2) return;
+                if (newArm) return;   // 布防态点击归 placeNewPrimer，不弹编辑框
+                ReferenceFrame frame = frameOf(e);
+                if (frame == null) return;
+                Primer hit = PrimerTrack.hitTestAny(e.getX(), e.getY(), frame.getChrName());
+                if (hit != null) {
+                    AddPrimerDialog.show((int) Math.round(frame.getChromosomePosition(e.getX())), hit, hit.group);
+                    e.consume();
+                }
+            }
+
+            @Override
             public void mouseMoved(java.awt.event.MouseEvent e) {
                 if (newArm) updateGhost(e);   // v0.1.68：虚影跟手
             }
@@ -1064,17 +1080,36 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         }
     }
 
-    /** 布防态点击：以点击点为中心放一条默认长度引物（"一一对应"），弹编辑框微调。 */
+    /**
+     * 布防态点击：以点击点为中心放一条默认长度引物（"一一对应"），弹编辑框微调。
+     * v0.1.94：两处修正（老板实测"出现虚影后无法取消、点击也没法更新原引物"）——
+     *  1) 点击落在已有引物上 → 直接弹该引物的编辑框（此前弹的是"添加新引物"框，
+     *     新引物叠在原引物上且改不到原引物，看起来就是"没办法更新"）；
+     *  2) 编辑框取消/Esc 关闭 → 立即解除布防并清虚影（模态框开着时全局 Esc 监听
+     *     因焦点在对话框被跳过，关框后仍留在布防态 → 反复弹框的死循环）。
+     *  确认提交则保持布防（连续放置多条，Esc 退出）。
+     */
     private static void placeNewPrimer(java.awt.event.MouseEvent e) {
         ReferenceFrame frame = frameOf(e);
         if (frame == null) return;
         String chr = frame.getChrName();
         if (PrimerTrack.isInToolbarAny(e.getX(), e.getY(), chr)) return;   // 工具条上不放置
-        int bp = bpAt(e, frame);
-        int len = PrimerStore.defaultLen;
-        int start = Math.max(0, bp - len / 2);   // 引物中心对齐点击点
-        AddPrimerDialog.show(start, null, null);  // 手动轨(group=null)，名称自动 nextName
-        // 布防保持（连续放置多条），Esc 退出
+        clearGhost();   // 模态框打开期间虚影冻结，先收掉避免遮挡
+        boolean ok;
+        Primer hit = PrimerTrack.hitTestAny(e.getX(), e.getY(), chr);
+        if (hit != null) {
+            setSelected(hit);                              // 命中已有引物 → 编辑它
+            ok = AddPrimerDialog.show(hit.start, hit, hit.group);
+        } else {
+            int bp = bpAt(e, frame);
+            int len = PrimerStore.defaultLen;
+            int start = Math.max(0, bp - len / 2);   // 引物中心对齐点击点
+            ok = AddPrimerDialog.show(start, null, null);  // 手动轨(group=null)，名称自动 nextName
+        }
+        if (!ok) {   // v0.1.94：取消/Esc → 退出布防，不再反复弹框
+            newArm = false;
+            clearGhost();
+        }
     }
 
     /** 虚影跟手：更新 glass 上的半透明新引物位置。 */
