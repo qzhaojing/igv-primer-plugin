@@ -115,6 +115,9 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                     rulerGlass = new RulerGlass();
                     f.setGlassPane(rulerGlass);
                     rulerGlass.setVisible(true);
+                    // v0.1.84：定时器必须在 glass 装好时就常驻启动——不能等 setPcrPreview。
+                    //   否则纯 Shift 选区（不开弹窗）时定时器不跑，缩放/平移后选中高亮脱节。
+                    startViewSyncTimer();
                     // v0.1.48：装完必须 validate 生效，否则 glass 不显示 → 只剩轨内局部红线
                     try { f.getRootPane().revalidate(); f.getRootPane().repaint(); } catch (Exception ignore2) { }
                 }
@@ -227,6 +230,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (dp == null || frame == null) return;
         if (rulerGlass == null) setupGlass();
         if (rulerGlass == null) return;
+        startViewSyncTimer();   // v0.1.84：兜底保证视图同步常驻（setupGlass 里也会启动）
         try {
             int x1 = (int) Math.round(frame.getScreenPosition(a));
             int x2 = (int) Math.round(frame.getScreenPosition(b));
@@ -334,9 +338,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 if (rulerGlass != null) rulerGlass.repaint();
                 repaintDataPanels();
             }
-        } else {
-            syncSelectionRuler();   // 选中/编辑高亮同 bug 类：视图变化后也要跟随
         }
+        syncSelectionRuler();   // v0.1.84：无条件跑（原来挂在"无预览"分支下，弹窗开着时选区不跟随）
     }
 
     private static void refreshPcrPreview() {
