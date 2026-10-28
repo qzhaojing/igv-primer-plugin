@@ -28,3 +28,4 @@ result.txt
 # Test class output & patch build dir
 tests/*.class
 igv-patches/bin/
+test-classes/

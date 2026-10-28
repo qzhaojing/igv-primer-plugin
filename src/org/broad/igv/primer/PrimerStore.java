@@ -6,7 +6,9 @@ import org.broad.igv.feature.genome.GenomeManager;
 import org.broad.igv.ui.IGV;
 import org.broad.igv.ui.panel.TrackPanel;
 
+import javax.swing.JOptionPane;
 import javax.swing.SwingUtilities;
+import javax.swing.SwingWorker;
 
 import java.awt.Rectangle;
 import java.io.File;
@@ -52,6 +54,8 @@ public class PrimerStore {
 
     // MFEprimer 外部引擎（可选）：配置 exe 路径后用其热力学 dimer 计算替代内置估算；空=内置估算
     public static String mfeExePath = "";
+    // 导出引物时自动跑一次 MFEprimer qc（替代导出后再手动 dimer 一遍）
+    public static boolean mfeAutoQcOnExport = false;
 
     static {
         loadDefaults();
@@ -301,6 +305,160 @@ public class PrimerStore {
         } finally {
             if (fa != null) fa.delete();
             if (out != null) out.delete();
+        }
+    }
+
+    /**
+     * 运行一次 MFEprimer 评估（spec / coverage / qc），后台执行不卡 UI，结束后弹报告。
+     * 复用现有 mfeExePath 配置与「IGV 当前基因组」作为背景数据库，无需用户另给 FASTA。
+     *
+     * @param sub    MFEprimer 子命令：spec / coverage / qc
+     * @param title  报告窗口标题
+     * @param extra  附加命令行参数（如 spec 的 -s/-S/-c）
+     */
+    public static void runMfeAssess(final String sub, final String title, final List<String> extra) {
+        runMfeAssess(sub, title, extra, null);
+    }
+
+    /**
+     * 同 {@link #runMfeAssess(String, String, List)}，但 existing 非空时就地刷新该窗口
+     * （重新检测用，避免关窗再弹窗闪烁），并在早退/失败/取消时恢复其「重新检测」按钮。
+     */
+    public static void runMfeAssess(final String sub, final String title, final List<String> extra, final MfeReportDialog existing) {
+        if (mfeExePath == null || mfeExePath.trim().isEmpty()) {
+            if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+            else JOptionPane.showMessageDialog(null, "尚未配置 MFEprimer 路径。\n请打开「引物操作 ▸ 设置失败判定条件」填入 MFEprimer 可执行文件绝对路径。");
+            return;
+        }
+        final List<Primer> snap = getPrimers();
+        if (snap.isEmpty()) {
+            if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+            else JOptionPane.showMessageDialog(null, "当前没有可导评估的引物。");
+            return;
+        }
+        // 轻量子命令：qc（二聚体+发夹）/ dimer / hairpin，都无需背景基因组，秒级
+        final boolean light = "qc".equals(sub) || "dimer".equals(sub) || "hairpin".equals(sub);
+        final MfeReportDialog[] target = {null};
+        final Runnable rerun = new Runnable() {
+            public void run() { runMfeAssess(sub, title, extra, target[0]); }   // target[0] = 当前显示的窗口
+        };
+        new SwingWorker<Void, Void>() {
+            protected Void doInBackground() {
+                try {
+                    File primers = MfeCli.writePrimerFasta(snap);
+                    if (primers == null) {
+                        if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+                        else JOptionPane.showMessageDialog(null, "没有可评估的引物序列（序列长度不足）。");
+                        return null;
+                    }
+
+                    if (light) {
+                        final String t = title;
+                        if ("qc".equals(sub)) {
+                            StringBuilder raw = new StringBuilder();
+                            File outD = File.createTempFile("mfe_qc_dimer_", ".txt"); outD.deleteOnExit();
+                            String[] r1 = MfeCli.run("dimer", primers, null, outD, java.util.Collections.singletonList("-p"));
+                            String dRaw = r1[1] != null && !r1[1].isEmpty() ? r1[1] : r1[0];
+                            raw.append("===== 二聚体 (dimer) =====\n").append(dRaw).append("\n");
+                            // 发夹：单序列结构，无需基因组；单步失败不影响二聚体结果
+                            try {
+                                File outH = File.createTempFile("mfe_qc_hairpin_", ".txt"); outH.deleteOnExit();
+                                String[] r2 = MfeCli.run("hairpin", primers, null, outH, null);
+                                String hRaw = r2[1] != null && !r2[1].isEmpty() ? r2[1] : r2[0];
+                                raw.append("===== 发夹 (hairpin) =====\n").append(hRaw).append("\n");
+                            } catch (Exception hx) {
+                                raw.append("===== 发夹 (hairpin) =====\n[hairpin 运行失败：").append(hx.getMessage()).append("]\n");
+                            }
+                            final String rawS = raw.toString();
+                            final String summary = MfeReportDialog.summarize(dRaw, "");
+                            SwingUtilities.invokeLater(new Runnable() {
+                                public void run() {
+                                    if (existing != null) existing.replaceContent(t, summary, rawS);
+                                    else { target[0] = new MfeReportDialog(t, summary, rawS, rerun); target[0].setVisible(true); }
+                                }
+                            });
+                            return null;
+                        }
+                        // dimer / hairpin 单跑：无需基因组
+                        String subLabel = "dimer".equals(sub) ? "二聚体" : "发夹";
+                        File out = File.createTempFile("mfe_" + sub + "_", ".txt"); out.deleteOnExit();
+                        String[] res = MfeCli.run(sub, primers, null, out, extra);
+                        String body = res[1] != null && !res[1].isEmpty() ? res[1] : res[0];
+                        final String rawS = "===== " + subLabel + " (" + sub + ") =====\n" + body + "\n";
+                        final String summary = MfeReportDialog.summarize(body, "");
+                        SwingUtilities.invokeLater(new Runnable() {
+                            public void run() {
+                                if (existing != null) existing.replaceContent(t, summary, rawS);
+                                else { target[0] = new MfeReportDialog(t, summary, rawS, rerun); target[0].setVisible(true); }
+                            }
+                        });
+                        return null;
+                    }
+
+                    // 其余 sub（spec / coverage）：需要背景基因组
+                    // 大基因组尺寸警示：人类 ~3Gb 全量 dump 很慢，提示改用"仅含引物染色体"
+                    long total = MfeGenome.totalBp();
+                    boolean limit = false;
+                    if (total > 150_000_000L) {
+                        final int[] res = {-1};
+                        try {
+                            SwingUtilities.invokeAndWait(new Runnable() {
+                                public void run() {
+                                    res[0] = JOptionPane.showConfirmDialog(null,
+                                            "当前基因组约 " + (total / 1_000_000) + " Mb，全量导出建索引可能很慢。\n"
+                                            + "是否仅导出含引物的染色体（更快，但 off-target 只覆盖这些染色体）？\n"
+                                            + "（选「否」= 全量导出；「取消」= 放弃本次评估）",
+                                            "大基因组提示", JOptionPane.YES_NO_CANCEL_OPTION);
+                                }
+                            });
+                        } catch (Exception ignore) {}
+                        int r = res[0];
+                        if (r == JOptionPane.CANCEL_OPTION) {
+                            if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+                            return null;
+                        }
+                        limit = (r == JOptionPane.YES_OPTION);
+                    }
+                    File genome = MfeGenome.dump(limit);
+                    if (genome == null) {
+                        if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+                        else JOptionPane.showMessageDialog(null, "无法导出当前基因组（是否已加载参考序列？）");
+                        return null;
+                    }
+                    File out = File.createTempFile("mfe_out_", ".txt");
+                    out.deleteOnExit();
+                    String[] res = MfeCli.run(sub, primers, genome, out, extra);
+                    final String summary = MfeReportDialog.summarize(res[0], res[1]);
+                    final String raw = (res[1] != null && !res[1].isEmpty() ? res[1] : res[0]);
+                    SwingUtilities.invokeLater(new Runnable() {
+                        public void run() {
+                            if (existing != null) existing.replaceContent(title, summary, raw);
+                            else { target[0] = new MfeReportDialog(title, summary, raw, rerun); target[0].setVisible(true); }
+                        }
+                    });
+                } catch (Exception ex) {
+                    final String msg = ex.getMessage();
+                    SwingUtilities.invokeLater(new Runnable() {
+                        public void run() {
+                            if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
+                            else JOptionPane.showMessageDialog(null, "MFEprimer 评估失败: " + msg);
+                        }
+                    });
+                }
+                return null;
+            }
+        }.execute();
+    }
+
+    /** 打开 MFEprimer 综合面板（右键「MFEprimer 质量检查」直接打开，空面板，点功能按钮开始评估）。 */
+    public static void openMfePanel() {
+        new MfeReportDialog("MFEprimer 质量检查", true).setVisible(true);
+    }
+
+    /** 导出引物时若开启自动 qc 且已配置 MFEprimer，则后台跑一次 qc（不弹"未配置"提示）。 */
+    public static void maybeAutoQcOnExport() {
+        if (mfeAutoQcOnExport && mfeExePath != null && !mfeExePath.trim().isEmpty()) {
+            runMfeAssess("qc", "MFEprimer 质量检查 (qc)", java.util.Collections.emptyList());
         }
     }
 
@@ -933,6 +1091,7 @@ public class PrimerStore {
             props.setProperty("fail.hetero3pTh", String.valueOf(failHetero3pTh));
             props.setProperty("fail.heteroDgTh", String.valueOf(failHeteroDgTh));
             props.setProperty("mfe.exePath", mfeExePath == null ? "" : mfeExePath);
+            props.setProperty("mfe.autoQcOnExport", String.valueOf(mfeAutoQcOnExport));
             props.store(new FileWriter(f), "IGV primer designer defaults");
         } catch (Exception ignore) {
         }
@@ -962,6 +1121,7 @@ public class PrimerStore {
             if (props.containsKey("fail.hetero3pTh")) failHetero3pTh = Integer.parseInt(props.getProperty("fail.hetero3pTh"));
             if (props.containsKey("fail.heteroDgTh")) failHeteroDgTh = Double.parseDouble(props.getProperty("fail.heteroDgTh"));
             if (props.containsKey("mfe.exePath")) mfeExePath = props.getProperty("mfe.exePath");
+            if (props.containsKey("mfe.autoQcOnExport")) mfeAutoQcOnExport = Boolean.parseBoolean(props.getProperty("mfe.autoQcOnExport"));
         } catch (Exception ignore) {
         }
     }

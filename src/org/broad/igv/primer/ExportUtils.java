@@ -241,6 +241,7 @@ public class ExportUtils {
                     + (customCnt > 0 ? "；" + customCnt + " 条为本条单独设置" : "")
                     + "），header 记录 |tail。" : "")
                     + "\n（header 内含坐标/分组/配对/布局行，可直接再用「导入」还原成图）");
+            PrimerStore.maybeAutoQcOnExport();
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }
@@ -293,6 +294,7 @@ public class ExportUtils {
             w.close();
             JOptionPane.showMessageDialog(null, "已导出 " + n + " 条引物的测序读段到: " + f.getAbsolutePath()
                     + (group == null ? "" : "（来源：" + group + "）"));
+            PrimerStore.maybeAutoQcOnExport();
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导出失败: " + ex.getMessage());
         }
