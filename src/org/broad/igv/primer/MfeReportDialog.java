@@ -232,6 +232,15 @@ public class MfeReportDialog extends JDialog {
 
     /** 在 funcBar 上放 5 个功能按钮：二聚体/发夹/特异性/覆盖度/质量检查。 */
     private void addFuncButtons(JPanel funcBar) {
+        // v0.1.95：路径设置按钮（随时可改，首次使用先点它填绝对路径）
+        JButton pathBtn = new JButton("⚙ 设置 MFEprimer 路径");
+        pathBtn.setToolTipText("填写 MFEprimer 可执行文件绝对路径（如 F:\\tools\\MFEprimer.exe），填好即生效");
+        pathBtn.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { showPathDialog(); }
+        });
+        funcBar.add(pathBtn);
+        funcBar.add(new javax.swing.JLabel(" | "));
+
         String[][] defs = {
             {"二聚体", "dimer", "MFEprimer 二聚体"},
             {"发夹", "hairpin", "MFEprimer 发夹"},
@@ -247,7 +256,7 @@ public class MfeReportDialog extends JDialog {
                 public void actionPerformed(java.awt.event.ActionEvent e) {
                     if (PrimerStore.mfeExePath == null || PrimerStore.mfeExePath.trim().isEmpty()) {
                         JOptionPane.showMessageDialog(MfeReportDialog.this,
-                                "尚未配置 MFEprimer 路径。\n请打开「引物操作 ▸ 设置失败判定条件」填入 MFEprimer 可执行文件绝对路径。");
+                                "尚未配置 MFEprimer 路径。\n请点击上方「⚙ 设置 MFEprimer 路径」按钮填写可执行文件绝对路径。");
                         return;
                     }
                     java.util.List<String> extra;
@@ -261,6 +270,37 @@ public class MfeReportDialog extends JDialog {
             });
             funcBar.add(b);
         }
+    }
+
+    /** v0.1.95：设置 MFEprimer 可执行文件绝对路径。文本框 + 浏览按钮，确定后持久化到配置文件。 */
+    private void showPathDialog() {
+        final javax.swing.JTextField tf = new javax.swing.JTextField(
+                PrimerStore.mfeExePath == null ? "" : PrimerStore.mfeExePath, 40);
+        JButton browse = new JButton("浏览…");
+        browse.addActionListener(new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                javax.swing.JFileChooser fc = new javax.swing.JFileChooser();
+                fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("可执行文件 (exe/bat/sh)", "exe", "bat", "sh"));
+                if (fc.showOpenDialog(MfeReportDialog.this) == javax.swing.JFileChooser.APPROVE_OPTION) {
+                    tf.setText(fc.getSelectedFile().getAbsolutePath());
+                }
+            }
+        });
+        JPanel p = new JPanel(new java.awt.BorderLayout(6, 4));
+        p.add(new JLabel("MFEprimer 可执行文件绝对路径："), java.awt.BorderLayout.NORTH);
+        p.add(tf, java.awt.BorderLayout.CENTER);
+        p.add(browse, java.awt.BorderLayout.EAST);
+        int r = JOptionPane.showConfirmDialog(MfeReportDialog.this, p, "设置 MFEprimer 路径",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (r != JOptionPane.OK_OPTION) return;
+        String path = tf.getText().trim();
+        PrimerStore.mfeExePath = path;
+        PrimerStore.saveFailConfig();
+        if (path.isEmpty())
+            JOptionPane.showMessageDialog(MfeReportDialog.this, "已清空 MFEprimer 路径（将退回内置估算）。");
+        else
+            JOptionPane.showMessageDialog(MfeReportDialog.this, "已保存 MFEprimer 路径：\n" + path
+                    + "\n\n可直接点击上方功能按钮开始评估。");
     }
 
     private void setFuncButtonsEnabled(boolean en) {
@@ -306,11 +346,17 @@ public class MfeReportDialog extends JDialog {
 
     private String render() {
         if (isPanel && (raw == null || raw.trim().isEmpty())) {
-            return "点击上方按钮开始评估：\n"
-                + "  • 二聚体 / 发夹 —— 秒级，无需基因组（仅 3' 端互补）\n"
-                + "  • 特异性 / 覆盖度 —— 需当前 IGV 基因组建索引（大基因组会提示）\n"
-                + "  • 质量检查 —— 二聚体+发夹合一快查\n\n"
-                + "结果将在本面板下方显示；评估进行中按钮变灰，期间可继续在 IGV 中编辑引物。";
+            boolean hasPath = PrimerStore.mfeExePath != null && !PrimerStore.mfeExePath.trim().isEmpty();
+            StringBuilder sb = new StringBuilder();
+            if (!hasPath) {
+                sb.append("首次使用请先点上方「⚙ 设置 MFEprimer 路径」按钮，填写 MFEprimer 可执行文件绝对路径。\n\n");
+            }
+            sb.append("点击上方功能按钮开始评估：\n")
+              .append("  • 二聚体 / 发夹 —— 秒级，无需基因组（仅 3' 端互补）\n")
+              .append("  • 特异性 / 覆盖度 —— 需当前 IGV 基因组建索引（大基因组会提示）\n")
+              .append("  • 质量检查 —— 二聚体+发夹合一快查\n\n")
+              .append("结果将在本面板下方显示；评估进行中按钮变灰，期间可继续在 IGV 中编辑引物。");
+            return sb.toString();
         }
         StringBuilder sb = new StringBuilder();
         if (summary != null && !summary.trim().isEmpty()) {

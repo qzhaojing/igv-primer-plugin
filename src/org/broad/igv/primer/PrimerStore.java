@@ -327,7 +327,7 @@ public class PrimerStore {
     public static void runMfeAssess(final String sub, final String title, final List<String> extra, final MfeReportDialog existing) {
         if (mfeExePath == null || mfeExePath.trim().isEmpty()) {
             if (existing != null) { existing.restoreRerunButton(); existing.restoreFuncButtons(); }
-            else JOptionPane.showMessageDialog(null, "尚未配置 MFEprimer 路径。\n请打开「引物操作 ▸ 设置失败判定条件」填入 MFEprimer 可执行文件绝对路径。");
+            else JOptionPane.showMessageDialog(null, "尚未配置 MFEprimer 路径。\n请打开「MFEprimer 质量检查」面板，点击「⚙ 设置 MFEprimer 路径」按钮填写可执行文件绝对路径。");
             return;
         }
         final List<Primer> snap = getPrimers();

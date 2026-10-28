@@ -549,7 +549,6 @@ public class PrimerTrack extends AbstractTrack {
         JTextField h3 = tf.apply(String.valueOf(PrimerStore.failHetero3pTh));
         JTextField hdg = tf.apply(String.valueOf(PrimerStore.failHeteroDgTh));
         JCheckBox qcCb = new JCheckBox("导出引物后自动运行 MFEprimer qc（仅二聚体+发夹，不做脱靶）", PrimerStore.mfeAutoQcOnExport);
-        JTextField mfe = tf.apply(PrimerStore.mfeExePath == null ? "" : PrimerStore.mfeExePath);
         JPanel p = new JPanel(new java.awt.GridLayout(0, 2, 6, 4));
         p.add(new JLabel("长度下限 (nt)"));            p.add(lenMin);
         p.add(new JLabel("长度上限 (nt)"));            p.add(lenMax);
@@ -562,7 +561,6 @@ public class PrimerTrack extends AbstractTrack {
         p.add(new JLabel("配对 3' 互补阈值 (≥即失败)")); p.add(h3);
         p.add(new JLabel("配对二聚体 ΔG 阈值 (≤即失败)")); p.add(hdg);
         p.add(new JLabel(""));                         p.add(qcCb);
-        p.add(new JLabel("MFEprimer 路径 (可选)"));    p.add(mfe);
         int r = JOptionPane.showConfirmDialog(null, p, "设置失败判定条件",
                 JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
         if (r != JOptionPane.OK_OPTION) return;
@@ -578,7 +576,6 @@ public class PrimerTrack extends AbstractTrack {
             PrimerStore.failHetero3pTh = Integer.parseInt(h3.getText().trim());
             PrimerStore.failHeteroDgTh = Double.parseDouble(hdg.getText().trim());
             PrimerStore.mfeAutoQcOnExport = qcCb.isSelected();
-            PrimerStore.mfeExePath = mfe.getText().trim();
             PrimerStore.saveFailConfig();
             PrimerStore.refreshAll();
             JOptionPane.showMessageDialog(null, "已更新失败判定条件，并重新评估全部引物。");
