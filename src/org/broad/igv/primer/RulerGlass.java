@@ -98,5 +98,38 @@ public class RulerGlass extends JComponent {
             for (int i = 0; i < xs.length && i < guideBps.length; i++)
                 g2.drawString(String.valueOf(guideBps[i] + 1), xs[i] + 3, yTop + 12);
         }
+        // v0.1.83：选区尺寸双箭头标注——箭头顶住选区两边，中间大字显示选区大小（自动 kb/bp）
+        int dimY = yTop + 36;
+        g2.setStroke(new BasicStroke(1.5f));
+        g2.setColor(new Color(255, 90, 20, 255));
+        int head = 6;
+        g2.drawLine(x1, dimY, x2, dimY);                       // 横线
+        g2.drawLine(x1, dimY, x1 + head, dimY - 3);            // 左箭头（指向左 = 顶住左缘）
+        g2.drawLine(x1, dimY, x1 + head, dimY + 3);
+        g2.drawLine(x2, dimY, x2 - head, dimY - 3);            // 右箭头（指向右 = 顶住右缘）
+        g2.drawLine(x2, dimY, x2 - head, dimY + 3);
+        int sizeBp = (guideBps != null && guideBps.length >= 2)
+                ? Math.max(0, guideBps[1] - guideBps[0] + 1)   // 选区实际 bp 跨度
+                : (x2 - x1);
+        String sz = fmtSize(sizeBp);
+        g2.setFont(g2.getFont().deriveFont(java.awt.Font.BOLD, 12f));
+        java.awt.FontMetrics fm = g2.getFontMetrics();
+        int tw = fm.stringWidth(sz), th = fm.getHeight();
+        int tx = (x1 + x2) / 2;
+        int bgX = tx - tw / 2 - 4, bgY = dimY - th / 2;
+        g2.setColor(new Color(255, 255, 255, 215));            // 半透明白底，保证任何背景可读
+        g2.fillRect(bgX, bgY, tw + 8, th);
+        g2.setColor(new Color(220, 70, 10, 255));
+        g2.drawString(sz, bgX + 4, bgY + fm.getAscent());
+    }
+
+    /** 选区大小格式化：≥1000bp 显示一位小数 kb（去 .0），否则显示 bp。例：1.1kb / 500bp / 10.5kb */
+    private static String fmtSize(int bp) {
+        if (bp >= 1000) {
+            String s = String.format("%.1f", bp / 1000.0);
+            if (s.endsWith(".0")) s = s.substring(0, s.length() - 2);
+            return s + "kb";
+        }
+        return bp + "bp";
     }
 }
