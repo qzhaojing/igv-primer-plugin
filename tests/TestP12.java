@@ -166,6 +166,29 @@ public class TestP12 {
         }
         check(!threw && PrimerStore.selected == null, "setSelected(null) 清除选中且不抛异常");
 
+        // ---------- 7) v0.1.86：1-F-多-R 合并分量自动展开（两条 R 重叠 → 分行）----------
+        // 场景：v0.1.65 同序列去重后两条产物共用一条 F（SH_F 连 SH_R1 和 SH_R2），
+        // 两条 R 位置几乎重合 → 旧逻辑整分量一行，弧线/标签完全重叠。
+        PrimerStore.onePairPerRow = true;
+        Primer shF = mk("SH_F", 1000, 1018, '+', "g9");
+        Primer shR1 = mk("SH_R1", 3200, 3218, '-', "g9");
+        Primer shR2 = mk("SH_R2", 3210, 3228, '-', "g9");   // 与 R1 重叠（两条产物近似）
+        shF.pairedWith = new java.util.LinkedHashSet<String>(Arrays.asList(shR1.name, shR2.name));
+        shR1.pairedWith = new java.util.LinkedHashSet<String>(Arrays.asList(shF.name));
+        shR2.pairedWith = new java.util.LinkedHashSet<String>(Arrays.asList(shF.name));
+        List<Primer> v8 = new ArrayList<Primer>(Arrays.asList(shF, shR1, shR2));
+        Map<Primer, Integer> rows8 = PrimerTrack.layoutRows(v8);
+        check(rowOf(rows8, shR1) != rowOf(rows8, shR2),
+                "1-F-多-R：重叠的两条 R 自动分行（行 " + rowOf(rows8, shR1) + "/" + rowOf(rows8, shR2) + "）");
+        check(rowOf(rows8, shF) == rowOf(rows8, shR1) || rowOf(rows8, shF) == rowOf(rows8, shR2),
+                "共用 F 与至少一条 R 同行（弧线可画）");
+        // 紧凑模式（关开关）同样要拆：重叠成员不开新行会互相压住
+        PrimerStore.onePairPerRow = false;
+        Map<Primer, Integer> rows9 = PrimerTrack.layoutRows(
+                new ArrayList<Primer>(Arrays.asList(shF, shR1, shR2)));
+        check(rowOf(rows9, shR1) != rowOf(rows9, shR2), "紧凑模式下重叠 R 同样分行");
+        PrimerStore.onePairPerRow = true;
+
         // ---------- 6) 开关默认值 ----------
         check(PrimerStore.onePairPerRow, "onePairPerRow 默认开（多对自动分行）");
 

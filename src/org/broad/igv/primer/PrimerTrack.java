@@ -756,25 +756,29 @@ public class PrimerTrack extends AbstractTrack {
             }
             if (members.isEmpty()) continue;
             if (fixed.isEmpty()) {
-                int t;
-                if (onePair) {
-                    // 每对独占一行：直接开新行，不与其它配对组共行（多对引物一眼分清）
-                    rows.add(new java.util.ArrayList<Primer>());
-                    t = rows.size() - 1;
-                } else {
-                    long lo = Long.MAX_VALUE, hi = Long.MIN_VALUE;
-                    for (Primer m : members) {
-                        long[] sp = spanOf(m);
-                        lo = Math.min(lo, sp[0]); hi = Math.max(hi, sp[1]);
+                // v0.1.86：分量内成员**逐条**贪心安行——与该分量已占行内的成员跨度重叠就再开新行。
+                // 修复：v0.1.65 同序列去重合并出的 1-F-多-R 大分量（两条产物共用 F、两条 R 位置
+                //   几乎重合）旧逻辑整分量画一行 → 弧线/标签完全重叠；现在重叠的 R 自动展开到
+                //   不同行，弧线跨行连接（v0.1.41 边模型支持）。
+                // onePair 模式：分量独占自己的新行，不与其他分量共行；compact 模式：可复用任何不重叠的行。
+                java.util.List<Integer> myRows = new java.util.ArrayList<Integer>();
+                for (Primer m : members) {
+                    long[] sp = spanOf(m);
+                    int t = -1;
+                    if (onePair) {
+                        for (int ri : myRows) {
+                            if (!rowOverlaps(rows.get(ri), sp[0], sp[1])) { t = ri; break; }
+                        }
+                    } else {
+                        for (int i = 0; i < rows.size(); i++) {
+                            if (!rowOverlaps(rows.get(i), sp[0], sp[1])) { t = i; break; }
+                        }
                     }
-                    t = -1;
-                    for (int i = 0; i < rows.size(); i++) {
-                        if (!rowOverlaps(rows.get(i), lo, hi)) { t = i; break; }
-                    }
-                    if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; }
+                    if (t < 0) { rows.add(new java.util.ArrayList<Primer>()); t = rows.size() - 1; myRows.add(t); }
+                    rows.get(t).add(m);
+                    map.put(m, t);
+                    if (!compRows.contains(t)) compRows.add(t);
                 }
-                for (Primer m : members) { rows.get(t).add(m); map.put(m, t); }
-                compRows.add(t);
             } else {
                 Integer r0 = map.get(fixed.get(0));
                 for (Primer m : members) { ensureRows(rows, r0); rows.get(r0).add(m); map.put(m, r0); }
