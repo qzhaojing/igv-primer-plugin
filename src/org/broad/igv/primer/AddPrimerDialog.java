@@ -277,9 +277,12 @@ public class AddPrimerDialog {
                             } else {
                                 PrimerMetrics.DimerShape sh = PrimerMetrics.dimerShape(p.seq, pt.seq);
                                 if (sh.valid) {
-                                    tb.append("     5'-").append(sh.topLine).append("-3'").append('\n');
-                                    tb.append("       ").append(sh.bondLine).append('\n');
-                                    tb.append("     3'-").append(sh.botLine).append("-5'").append('\n');
+                                    // v0.1.85：topLine/botLine 自带 5'-…-3' 标记、bondLine 自带 3 格缩进补偿
+                                    //（与 "5'-" 同宽），这里统一 5 格前缀即可三行对齐——
+                                    // 旧代码再包一层 5'-…-3'（重复）且竖线行少缩 1 格（错位）。
+                                    tb.append("     ").append(sh.topLine).append('\n');
+                                    tb.append("     ").append(sh.bondLine).append('\n');
+                                    tb.append("     ").append(sh.botLine).append('\n');
                                 } else {
                                     tb.append("      （序列过短，无法绘制比对）");
                                     tb.append('\n');
