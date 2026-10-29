@@ -1453,29 +1453,29 @@ public class PrimerTrack extends AbstractTrack {
         }));
         menu.add(p3Menu);
 
-        // v0.1.70：导出 6 项（本轨 3 + 全部 3）折叠为一个子菜单
+        // v0.1.97：导出 6 项（本轨 3 + 全部 3）折叠为一个子菜单；导出项统一带「导出」前缀（v0.1.96 用户反馈：看不出哪些是导出）
         JMenu expMenu = new JMenu("导入导出 ▸");
         expMenu.add(item("导入 BED/FASTA（新建独立轨）", new Runnable() {
             public void run() { ExportUtils.importBED(); }
         }));
         expMenu.addSeparator();
-        expMenu.add(item("本轨 BED（方向+颜色+测序长度）", new Runnable() {
+        expMenu.add(item("导出本轨 BED（方向+颜色+测序长度）", new Runnable() {
             public void run() { ExportUtils.exportBED(PrimerTrack.this.group); }
         }));
-        expMenu.add(item("本轨引物序列 FASTA（按方向）", new Runnable() {
+        expMenu.add(item("导出本轨引物序列 FASTA（按方向）", new Runnable() {
             public void run() { ExportUtils.exportPrimerFasta(PrimerTrack.this.group); }
         }));
-        expMenu.add(item("本轨测序读段 FASTA（含测序长度区域）", new Runnable() {
+        expMenu.add(item("导出本轨测序读段 FASTA（含测序长度区域）", new Runnable() {
             public void run() { ExportUtils.exportReadFasta(PrimerTrack.this.group); }
         }));
         expMenu.addSeparator();
-        expMenu.add(item("全部 BED", new Runnable() {
+        expMenu.add(item("导出全部 BED", new Runnable() {
             public void run() { ExportUtils.exportBED(null); }
         }));
-        expMenu.add(item("全部引物序列 FASTA（按方向）", new Runnable() {
+        expMenu.add(item("导出全部引物序列 FASTA（按方向）", new Runnable() {
             public void run() { ExportUtils.exportPrimerFasta(null); }
         }));
-        expMenu.add(item("全部测序读段 FASTA（含测序长度区域）", new Runnable() {
+        expMenu.add(item("导出全部测序读段 FASTA（含测序长度区域）", new Runnable() {
             public void run() { ExportUtils.exportReadFasta(null); }
         }));
         menu.add(expMenu);
