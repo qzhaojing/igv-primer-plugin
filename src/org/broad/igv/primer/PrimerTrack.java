@@ -1451,6 +1451,10 @@ public class PrimerTrack extends AbstractTrack {
         p3Menu.add(item("⚡ 快速设计：视口中心取引物（0 对自动降级重试）", new Runnable() {
             public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, true, PrimerTrack.this.group); }
         }));
+        // v0.2.0：平铺设计——大目标区域自动划窗（产物 max 窗长、相邻重叠），逐窗设计覆盖全区域
+        p3Menu.add(item("平铺设计（Tiling 覆盖目的区域）...", new Runnable() {
+            public void run() { Primer3TilingDialog.open(PrimerTrack.this.group); }
+        }));
         menu.add(p3Menu);
 
         // v0.1.97：导出 6 项（本轨 3 + 全部 3）折叠为一个子菜单；导出项统一带「导出」前缀（v0.1.96 用户反馈：看不出哪些是导出）

@@ -335,10 +335,19 @@ public class Primer3Core {
          * 命名形如 group_P{pairNo}_F / group_P{pairNo}_R，pairedWith 互链同步用新名。
          */
         public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used, int pairNo) {
+            return toPrimers(chr, group, tmplOffset, used, pairNo, "P");
+        }
+
+        /**
+         * v0.2.0：tag 可指定编号前缀字母——普通设计 "P"（group_P{n}_F），
+         * 平铺设计 "T"（group_T{n}_F / T{n}_F），命名规则与其余完全一致。
+         */
+        public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used, int pairNo, String tag) {
             List<Primer> out = new ArrayList<Primer>();
             int no = pairNo > 0 ? pairNo : idx + 1;
-            // group==null（手动添加轨）时命名不带 "null_" 前缀，直接用 P{no}_F / P{no}_R
-            String prefix = (group == null) ? ("P" + no) : (group + "_P" + no);
+            String tg = (tag == null || tag.isEmpty()) ? "P" : tag;
+            // group==null（手动添加轨）时命名不带 "null_" 前缀，直接用 T{no}_F / T{no}_R
+            String prefix = (group == null) ? (tg + no) : (group + "_" + tg + no);
             if (leftSeq != null) {
                 String fn = unique(prefix + "_F", used);
                 Primer f = new Primer(fn, chr, tmplOffset + leftStart, tmplOffset + leftStart + leftLen,
@@ -371,7 +380,7 @@ public class Primer3Core {
                 }
             } else if (rightSeq != null) {
                 // 仅 R 向单引物
-                String rn = unique(group + "_P" + no + "_R", used);
+                String rn = unique(prefix + "_R", used);
                 Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
                         '-', "R2", rightLen, null);
                 r.group = group;

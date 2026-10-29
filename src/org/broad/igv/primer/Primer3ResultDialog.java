@@ -23,9 +23,20 @@ public class Primer3ResultDialog {
 
     /** 打开结果对话框（模态）。 */
     public static void show(final String chr, final String group, final List<Primer3Core.Pair> pairs, final int tmplOffset) {
+        show(chr, group, pairs, tmplOffset, null, null, null);
+    }
+
+    /**
+     * v0.2.0：平铺设计入口——tag 指定编号前缀（"T"，普通设计 null="P"）；
+     * pairNos 非 null 时勾选落轨按其对编号（平铺=连续 T1..Tk），不再走 nextPairNumber 续号；
+     * note 非 null 时追加到顶部提示（平铺参数与无解窗口信息）。
+     * 平铺的对坐标已预先换算为基因组坐标，tmplOffset 传 0。
+     */
+    public static void show(final String chr, final String group, final List<Primer3Core.Pair> pairs,
+                            final int tmplOffset, final String tag, final int[] pairNos, final String note) {
         SwingUtilities.invokeLater(new Runnable() {
             public void run() {
-                new Dlg(chr, group, pairs, tmplOffset).setVisible(true);
+                new Dlg(chr, group, pairs, tmplOffset, tag, pairNos, note).setVisible(true);
             }
         });
     }
@@ -36,14 +47,19 @@ public class Primer3ResultDialog {
         private final String chr;
         private final String group;
         private final int tmplOffset;
+        private final String tag;      // v0.2.0：编号前缀（null="P"）
+        private final int[] pairNos;   // v0.2.0：每对结果的指定编号（null=落轨时续号）
 
-        Dlg(String chr, final String group, List<Primer3Core.Pair> pairs, int tmplOffset) {
+        Dlg(String chr, final String group, List<Primer3Core.Pair> pairs, int tmplOffset,
+            String tag, int[] pairNos, String note) {
             super(IGV.getMainFrame(), "primer3 设计结果（" + chr + " · " + pairs.size()
                     + (pairs.size() == 1 && pairs.get(0).isSingle() ? " 条" : " 对") + "）", true);
             this.pairs = pairs;
             this.chr = chr;
             this.group = group;
             this.tmplOffset = tmplOffset;
+            this.tag = (tag == null || tag.isEmpty()) ? "P" : tag;
+            this.pairNos = pairNos;
 
             String[] cols = {"选", "#", "方向", "产物bp", "F 引物序列", "R 引物序列", "Tm F/R", "GC F/R",
                     "3'端二聚体", "位置 (F / R)"};
@@ -98,7 +114,8 @@ public class Primer3ResultDialog {
             btns.add(cancel);
             add(btns, BorderLayout.SOUTH);
 
-            JLabel tip = new JLabel("加入后引物为内存态（轨名带 *），工具条「另存为」可落盘为标准引物 BED；成对结果 F(绿,+)/R(蓝,-) 自动连线");
+            JLabel tip = new JLabel("加入后引物为内存态（轨名带 *），工具条「另存为」可落盘为标准引物 BED；成对结果 F(绿,+)/R(蓝,-) 自动连线"
+                    + (note != null && !note.isEmpty() ? " ｜ " + note : ""));
             tip.setBorder(BorderFactory.createEmptyBorder(2, 8, 2, 8));
             add(tip, BorderLayout.NORTH);
 
@@ -145,16 +162,18 @@ public class Primer3ResultDialog {
             // 组装 Primer（成对=F/R 互链；单引物=1 条固定方向）。
             // v0.1.66：编号延续——从分组内已有最大对编号 +1 开始（二次设计不再从 P1 重名被加 _2），
             // 勾选顺序即编号顺序；used 集合仍保留兜底去重（极端撞名时加 _2）。
-            int firstFree = PrimerStore.nextPairNumber(group);
+            // v0.2.0：平铺设计（pairNos 非 null）按指定编号（T1..Tk），不走 nextPairNumber 续号。
+            int firstFree = 1;
+            if (pairNos == null) firstFree = PrimerStore.nextPairNumber(group);
             Set<String> used = new HashSet<String>();
             for (Primer p : PrimerStore.getPrimersByGroup(group)) used.add(p.name);
             List<Primer> add = new ArrayList<Primer>();
             StringBuilder nums = new StringBuilder();
             for (int i = 0; i < chosen.size(); i++) {
-                int pairNo = firstFree + i;
-                add.addAll(chosen.get(i).toPrimers(chr, group, tmplOffset, used, pairNo));
+                int pairNo = (pairNos != null && i < pairNos.length) ? pairNos[i] : firstFree + i;
+                add.addAll(chosen.get(i).toPrimers(chr, group, tmplOffset, used, pairNo, tag));
                 if (nums.length() > 0) nums.append('、');
-                nums.append('P').append(pairNo);
+                nums.append(tag).append(pairNo);
             }
             // v0.1.65：同序列去重——primer3 对多个产物常挑同一条最优 F/R，直接加入会产生
             // 多条 chr/start/end/strand/seq 完全相同的冗余引物（BED 多条重复、tooltip 同位串显）
