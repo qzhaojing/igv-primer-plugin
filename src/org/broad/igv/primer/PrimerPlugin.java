@@ -7,8 +7,14 @@ import org.broad.igv.ui.PanelName;
 import org.broad.igv.ui.panel.TrackPanel;
 
 import javax.swing.Timer;
+import java.awt.AWTEvent;
+import java.awt.EventQueue;
+import java.awt.Toolkit;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -29,7 +35,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PrimerPlugin implements IGVPlugin {
 
     /** 插件版本号：显示在引物轨工具条最右侧（开发期对版用）。改功能时同步 +1。 */
-    public static final String VERSION = "v0.2.0";
+    public static final String VERSION = "v0.2.1";
 
     private static boolean inited = false;
     private static final Set<PrimerTrack> knownTracks = new LinkedHashSet<PrimerTrack>();
@@ -38,6 +44,7 @@ public class PrimerPlugin implements IGVPlugin {
     public void init() {
         if (inited) return;
         inited = true;
+        installErrorSink();   // v0.2.1：EDT/其它线程异常集中捕获（默认 javaw 下 stderr 不可见，异常被静默吞掉）
         try {
             // v0.1.42：把引物接入 IGV 顶栏搜索框（官方扩展点），输入引物名/基因名/分组名可跳转
             PrimerSearcher.register();
@@ -60,6 +67,69 @@ public class PrimerPlugin implements IGVPlugin {
             try { TailLibrary.init(); } catch (Throwable ignore) { }
         } catch (Throwable e) {
             org.apache.log4j.Logger.getLogger(PrimerPlugin.class).error("PrimerPlugin init failed", e);
+        }
+    }
+
+    // v0.2.1：全局异常捕获。IGV 用 javaw 启动，异常只进 stderr（不可见），Swing 在 EDT 处理器里抛错
+    // 会被静默吞掉 → 表现为「窗口弹不出、也没报错」。这里把异常落盘 + 弹对话框，方便定位。
+    private static boolean sinkInstalled = false;
+    private static boolean reporting = false;
+
+    private static void installErrorSink() {
+        if (sinkInstalled) return;
+        sinkInstalled = true;
+        try {
+            // 覆盖 AWT 事件分发：所有 EDT 里的未捕获异常（菜单点击、对话框构造等）都走这里
+            final EventQueue sysQ = Toolkit.getDefaultToolkit().getSystemEventQueue();
+            sysQ.push(new EventQueue() {
+                @Override
+                protected void dispatchEvent(AWTEvent e) {
+                    try {
+                        super.dispatchEvent(e);
+                    } catch (Throwable t) {
+                        reportError(t);
+                    }
+                }
+            });
+            // 其它线程（如 SwingWorker 后台）的未捕获异常
+            Thread.setDefaultUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler() {
+                public void uncaughtException(Thread t, Throwable e) { reportError(e); }
+            });
+        } catch (Throwable ignore) {
+            // 装不上也不能影响启动
+        }
+    }
+
+    /** 记录异常到 ~/.igv_primer/error.log 并弹对话框。重入安全。 */
+    static void reportError(Throwable t) {
+        if (t == null || reporting) return;
+        reporting = true;
+        try {
+            try {
+                File dir = new File(System.getProperty("user.home"), ".igv_primer");
+                if (dir.isDirectory() || dir.mkdirs()) {
+                    PrintWriter w = new PrintWriter(new FileWriter(new File(dir, "error.log"), true));
+                    w.write("==== " + new java.util.Date() + " : " + t.getClass().getName() + " ====\n");
+                    t.printStackTrace(w);
+                    w.write("\n");
+                    w.close();
+                }
+            } catch (Throwable ignore) {
+            }
+            final String msg = t.getClass().getSimpleName() + "：" + (t.getMessage() == null ? "（无消息）" : t.getMessage());
+            javax.swing.SwingUtilities.invokeLater(new Runnable() {
+                public void run() {
+                    try {
+                        javax.swing.JOptionPane.showMessageDialog(IGV.getMainFrame(),
+                                "引物插件运行出错（已记录到 ~/.igv_primer/error.log）：\n" + msg
+                                        + "\n\n请重启 IGV 后重做刚才操作，并把该文件内容或此提示发给我。",
+                                "引物插件错误", javax.swing.JOptionPane.ERROR_MESSAGE);
+                    } catch (Throwable ignore) {
+                    }
+                }
+            });
+        } finally {
+            reporting = false;
         }
     }
 
