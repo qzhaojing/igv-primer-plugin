@@ -41,11 +41,26 @@ public class MfeCli {
     }
 
     /**
-     * 运行一个 MFEprimer 子命令。
+     * 运行一个 MFEprimer 子命令（带 spec/coverage → pcr 运行时自愈合）。
      * @return String[2] = { stdout/err 文本, 输出文件文本（无则为 ""） }
      */
     public static String[] run(String sub, File inFasta, File genomeFasta, File outFile,
                               List<String> extra) throws Exception {
+        String[] r = runOnce(sub, inFasta, genomeFasta, outFile, extra);
+        // v0.1.99 自愈合：spec/coverage 在部分 MFEprimer 版本被合并进 pcr，
+        // 若运行报 "unknown command"，自动以 pcr 重试一次（pcr 是 4.x 统一入口）。
+        if (!"pcr".equals(sub) && ("spec".equals(sub) || "coverage".equals(sub))
+                && r[0].contains("unknown command") && r[0].contains("\"" + sub + "\"")) {
+            String[] r2 = runOnce("pcr", inFasta, genomeFasta, outFile,
+                    java.util.Collections.<String>emptyList());
+            if (!r2[0].contains("unknown command")) return r2;   // 回退成功则采用回退结果
+        }
+        return r;
+    }
+
+    /** 实际执行一次子命令（run 的本体，便于自愈合重试）。 */
+    private static String[] runOnce(String sub, File inFasta, File genomeFasta, File outFile,
+                                    List<String> extra) throws Exception {
         List<String> cmd = new ArrayList<String>();
         cmd.add(PrimerStore.mfeExePath.trim());
         cmd.add(sub);

@@ -1,7 +1,7 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.98]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.1.99]
 
 ## 状态
-- 版本 **v0.1.98**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
+- 版本 **v0.1.99**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
 - 历史版本对应关系：v8/v9/v10/v10.01（旧编号）→ 自 v0.1.1 起改用语义化点号编号。
 - 已集成 **Primer3**（区内 PCR 引物设计算法）与 **MFEprimer**（可选外部引擎：二聚体/发夹/特异性/覆盖度/质量检查）。
 - 预编译 `PrimerPlugin.jar`（仅含本插件类）可注入**任意** IGV 2.3.80 的 `igv.jar`：自动备份 + 去签名 + 写注册（见下方「安装」）。
@@ -16,6 +16,13 @@
 
 #### v0.1.93 快捷键补全
 - 普通模式双击引物 = 直接编辑；方向键移动在普通模式选中即生效（帮助面板宣称项全部兑现）。
+
+#### v0.1.99 MFEprimer 运行时自愈 + 修复 v0.1.98 静默构建失败
+- **运行时自愈（新增）**：`MfeCli.run` 改造成 `run` + `runOnce` 两层——若 `spec`/`coverage` 实际跑出来 `unknown command`，**自动以 `pcr` 重试一次**。即使各版本 `mfeprimer --help` 的输出措辞千奇百怪、探测偶尔误判，用户也绝不会再看到硬报错：要么走 `pcr`、要么按钮被能力探测置灰。
+- **修复 v0.1.98 静默构建失败（重要）**：v0.1.98 的「覆盖度」按钮加了后台探测（`SwingWorker`），但漏了 `import javax.swing.SwingWorker;`，导致 **v0.1.98 / 上一轮 v0.1.99 的构建全部编译失败**（`MfeReportDialog.java:306: 找不到符号 SwingWorker`）。
+  - 后果：自 v0.1.98 起，`PrimerPlugin.jar` 一直没被成功重打包，实际部署进 IGV 的仍是 **v0.1.97 旧类（仍硬编码 `coverage`）**——这正是用户反复看到 `unknown command "coverage"` 的真正原因，与「没重启 IGV」无关。
+  - 本轮补上 `import javax.swing.SwingWorker;`，构建恢复通过。**v0.1.99 才是首个真正生效的修复版本**，请务必重启 IGV 加载新 jar。
+- 面板顶部状态栏（`MFEprimer <版本> | 支持子命令: ...`）与「覆盖度→pcr 回退 / 不支持则置灰」的探测逻辑，设计与 v0.1.98 一致，本版一并生效。
 
 #### v0.1.98 MFEprimer 子命令版本自适应（coverage 不再报错）
 - **问题**：MFEprimer 各版本 CLI 子命令差异大，4.x 把 `spec`/`coverage` 合并进了 `pcr`；插件原先硬编码 `coverage` → 在 4.x 上直接 `unknown command "coverage"`。
