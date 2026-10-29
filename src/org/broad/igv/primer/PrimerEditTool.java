@@ -504,6 +504,19 @@ public class PrimerEditTool extends AbstractDataPanelTool {
                 java.awt.event.KeyEvent ke = (java.awt.event.KeyEvent) ev;
                 if (ke.getID() != java.awt.event.KeyEvent.KEY_PRESSED) return;
                 int c = ke.getKeyCode();
+                // v0.2.3：撤销/重做快捷键（Ctrl+Z 撤销；Ctrl+Y 或 Ctrl+Shift+Z 重做）。
+                // 在文本输入框（对话框/工具栏字段）打字时不拦截，交给控件自身的文本撤销。
+                if (ke.isControlDown()) {
+                    if (c == java.awt.event.KeyEvent.VK_Z && !ke.isShiftDown()) {
+                        if (!isTextInputFocused()) { History.undo(); ke.consume(); }
+                        return;
+                    }
+                    if (c == java.awt.event.KeyEvent.VK_Y
+                            || (c == java.awt.event.KeyEvent.VK_Z && ke.isShiftDown())) {
+                        if (!isTextInputFocused()) { History.redo(); ke.consume(); }
+                        return;
+                    }
+                }
                 switch (c) {
                     case java.awt.event.KeyEvent.VK_DELETE:
                     case java.awt.event.KeyEvent.VK_BACK_SPACE:
@@ -673,6 +686,7 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             int xr = r.x + r.width;
             boolean edge = Math.abs(x - xl) <= EDGE_PX || Math.abs(x - xr) <= EDGE_PX;
             dragging = hit;
+            History.recordUndo();   // v0.2.3：撤销/重做——记录拖拽前状态（松手若无位移则 discardLast）
             origStart = hit.start;
             origEnd = hit.end;
             mode = edge ? (Math.abs(x - xl) <= EDGE_PX ? MODE_RESIZE_L : MODE_RESIZE_R) : MODE_MOVE;
@@ -830,12 +844,14 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         // v0.2.2：编辑模式下单击/拖拽引物后选区「常驻」（不再松手即清），与非编辑模式一致。
         //        用最终位置重画 guides，使其保留在引物区间；空白点击仍会经 mousePressed 的 clearGuides 清除。
         if (dragging != null && mode != MODE_NONE) {
+            boolean crossTrack = false;   // v0.2.3：是否跨轨移动（该分支会 return，单独标记）
             ReferenceFrame rf = frameOf(e);
             if (rf != null) setGuides(rf, dragging.start, dragging.end);   // 重画到最终位置，保持常驻
             // v0.1.96：跨轨拖拽——松手落在另一条"有可见引物"的轨的纵向带内 → 整对迁移到该轨
             if (mode == MODE_MOVE) {
                 PrimerTrack tgt = PrimerTrack.trackAtScreenY(e.getY());
                 if (tgt != null && !java.util.Objects.equals(tgt.getGroup(), dragging.group)) {
+                    crossTrack = true;   // v0.2.3：跨轨移动已记录（mousePressed 记过 pre-drag），此处不再重复记
                     PrimerStore.movePrimersToGroup(java.util.Collections.singletonList(dragging), tgt.getGroup());
                     dragging = null;
                     mode = MODE_NONE;
@@ -848,6 +864,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             if (changed) {
                 PrimerStore.refreshSequence(dragging);
                 PrimerStore.resetDimerFlags();   // 序列可能变化：清陈旧二聚体标记（按需评估才重算）
+            } else if (!crossTrack) {
+                History.discardLast();   // v0.2.3：点了但没改动 → 不产生空撤销步
             }
             dragging = null;
             mode = MODE_NONE;

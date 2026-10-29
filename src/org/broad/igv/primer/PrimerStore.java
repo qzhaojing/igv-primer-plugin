@@ -65,7 +65,25 @@ public class PrimerStore {
         return new ArrayList<Primer>(primers);
     }
 
+    /**
+     * v0.2.3：撤销/重做用——把引物列表整体替换为给定快照（snap 内元素已深拷贝，这里再逐元素 .copy() 一次，
+     * 使还原进 primers 的对象与历史栈里保存的快照对象彻底解耦，避免后续编辑污染旧快照）。
+     * selName 非空则按名重新定位 selected（指向还原后的新对象），否则清空选中。
+     */
+    public static synchronized void restoreSnapshot(List<Primer> snap, String selName) {
+        primers.clear();
+        for (Primer p : snap) primers.add(p.copy());
+        selected = (selName == null) ? null : byName(selName);
+        cleanOrphanPairs();   // 兜底：快照自身一致则无副作用
+    }
+
+    /** 按名字重新定位选中引物（撤销/重做后指向还原出的新对象）。 */
+    public static synchronized void setSelectedByName(String name) {
+        selected = (name == null) ? null : byName(name);
+    }
+
     public static synchronized void add(Primer p) {
+        History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         if (p != null) dedupNames(java.util.Arrays.asList(p));   // v0.1.63：重名防护（防按名寻址连错实例）
         primers.add(p);
         linkByName(p);
@@ -75,6 +93,7 @@ public class PrimerStore {
     }
 
     public static synchronized void remove(Primer p) {
+        History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         primers.remove(p);
         if (selected == p) selected = null;
         cleanOrphanPairs();   // 被删引物的原配对组若只剩 1 条，散组防悬空
@@ -83,6 +102,7 @@ public class PrimerStore {
     }
 
     public static synchronized void clear() {
+        History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         primers.clear();
         selected = null;
         refresh();
@@ -90,6 +110,12 @@ public class PrimerStore {
     }
 
     public static synchronized void addAll(List<Primer> list) {
+        addAll(list, true);
+    }
+
+    /** v0.2.3：addAll 的撤销感知重载。record=false 时不记录（如 session 恢复从外部整体载入，不应产生撤销步）。 */
+    public static synchronized void addAll(List<Primer> list, boolean record) {
+        if (record) History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         dedupNames(list);   // v0.1.63：重名防护（防按名寻址连错实例）
         primers.addAll(list);
         for (Primer p : list) {
@@ -124,6 +150,7 @@ public class PrimerStore {
 
     /** 移除整个分组的引物（关闭轨道时调用）；返回删除条数。同步清理孤立配对并刷新。 */
     public static synchronized int removeGroup(String group) {
+        History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         java.util.List<Primer> keep = new java.util.ArrayList<Primer>();
         int cnt = 0;
         for (Primer p : primers) {
@@ -1010,6 +1037,7 @@ public class PrimerStore {
     public static synchronized void toggleEdge(Primer a, Primer b) {
         if (a == null || b == null || a == b) return;
         if (isPaired(a, b)) {
+            History.recordUndo();   // v0.2.3：撤销/重做——仅真正改边时才记
             removeEdge(a, b);
         } else {
             if (a.strand == b.strand) { warnSameStrand(a, b); return; }
@@ -1024,6 +1052,7 @@ public class PrimerStore {
                         "引物配对", javax.swing.JOptionPane.WARNING_MESSAGE);
                 return;
             }
+            History.recordUndo();   // v0.2.3：撤销/重做——仅真正改边时才记
             addEdge(a, b);
         }
         resetDimerFlags();
@@ -1043,6 +1072,7 @@ public class PrimerStore {
     /** 右键「取消该引物配对」/编辑框重设前脱离：解除该引物参与的全部边（不影响其他引物之间的边）。 */
     public static synchronized void unpairForSelected(Primer p) {
         if (p == null || p.pairedWith == null || p.pairedWith.isEmpty()) return;   // 未配对：静默忽略
+        History.recordUndo();   // v0.2.3：撤销/重做——确认有边可解才记
         removeAllEdges(p);
         resetDimerFlags();
         refresh();
@@ -1068,6 +1098,7 @@ public class PrimerStore {
             clearEdges(p);
         }
         if (!any) return;
+        History.recordUndo();   // v0.2.3：撤销/重做——确认有边可清才记
         resetDimerFlags();   // 全部取消配对：清二聚体标记
         refresh();
         autosave(true);
@@ -1079,6 +1110,7 @@ public class PrimerStore {
      *  同时清理被删引物遗留的孤立配对（残留边），避免悬空连线。
      *  注意：无撤销机制，调用方应在 UI 层先 confirm。 */
     public static synchronized int removeFailed() {
+        History.recordUndo();   // v0.2.3：撤销/重做——记录操作前状态
         int cnt = 0;
         java.util.List<Primer> keep = new java.util.ArrayList<Primer>();
         for (Primer p : primers) {

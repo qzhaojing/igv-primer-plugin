@@ -1,4 +1,4 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.2.2]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.2.3]
 
 ## 状态
 - 版本 **v0.2.1**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
@@ -16,6 +16,20 @@
 
 #### v0.1.93 快捷键补全
 - 普通模式双击引物 = 直接编辑；方向键移动在普通模式选中即生效（帮助面板宣称项全部兑现）。
+
+#### v0.2.3 撤销/重做（Ctrl+Z / Ctrl+Y）+ 工具栏图形按钮 + 20 步历史
+- 需求：加 Ctrl+Z 撤销快捷键（配套 Ctrl+Y / Ctrl+Shift+Z 重做），并在 PrimerTrack 工具栏最左侧加**图形按钮**（左箭头=撤销、右箭头=重做，无可操作时置灰），支持 **20 步**操作历史。
+- 设计：整库快照式撤销/重做——每次用户操作「开始前」把 `PrimerStore.primers` 全量深拷贝压入撤销栈；撤销时把当前态压入重做栈、还原快照。`Primer.pairedWith` 是 `Set<String>`（按名字存边），快照只需深拷贝引物对象即可完整还原连线关系。
+- 历史栈：`ArrayDeque<Snap>`，`Snap{ List<Primer> primers; String selName; }`；容量 `CAP=20`，压栈即清重做栈（线性历史）；`suspend/resume` 嵌套计数用于把多次内部变更合并为一步（导入、session 恢复）。
+- 记录点分离（避免空步/重复步）：
+  - 叶子级变更（`add/remove/clear/addAll(record)/removeGroup/removeFailed/toggleEdge/unpairForSelected/clearAllPairs`）方法内 `recordUndo()`，但 `toggleEdge/unpairForSelected/clearAllPairs` 在校验早退**之后**才记，避免「失败配对/空操作」产生空步。
+  - `move/copy` 跨轨不在内部记（防拖拽重复叠加），改在右键菜单调用处记；拖拽 `mousePressed` 记一次 pre-drag 快照，松手无位移则 `discardLast()`。
+  - 编辑字段改前记（`AddPrimerDialog` 编辑分支）。
+  - `importBED` 开头记一次 + `suspend` 包住内部 `removeGroup+addAll`，整次导入合并为一步；空导入 `discardLast()`。
+  - `PrimerSession.apply`（打开 session）用 `clear()+suspend` 整体屏蔽——session 恢复不等同用户操作，旧历史对新状态无意义。
+- 快捷键：全局 `AWTEventListener` 新增 Ctrl+Z（撤销）/ Ctrl+Y 或 Ctrl+Shift+Z（重做），`isTextInputFocused()` 挡住输入框误触发文本撤销。
+- 工具栏：新增 `ToolbarBtn.icon` 标志 + 5 参构造器，图形按钮不画文字改画箭头（`drawHistoryArrow`，按 `canUndo/canRedo` 置灰）；`runToolbar` 按 id 路由 `undo/redo`。
+- 新增 `History.java`（含 `CAP/recordUndo/discardLast/undo/redo/canUndo/canRedo/suspend/resume/clear`）；`PrimerStore` 加 `restoreSnapshot` + `setSelectedByName`。
 
 #### v0.2.2 编辑模式单击引物常驻选区（与非编辑模式一致）
 - 背景：此前在**编辑模式**下点击某条引物，选区（贯穿全高的淡色框 + 红线参考线）只在「按住/拖拽期间」显示，松手即消失；而普通模式点击引物选区会常驻。用户希望两种模式行为一致——点一下就出现、且保持显示。

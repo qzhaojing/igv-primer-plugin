@@ -334,6 +334,8 @@ public class ExportUtils {
         File[] fs = fc.getSelectedFiles();
         if (fs.length == 0) return;
         lastDir = fs[0].getParentFile();
+        History.recordUndo();   // v0.2.3：整次导入合并为一步撤销（内部 removeGroup/addAll 已被 suspend 屏蔽）
+        History.suspend();
         try {
             StringBuilder msg = new StringBuilder();
             int total = 0, skipped = 0;
@@ -370,6 +372,7 @@ public class ExportUtils {
             if (total == 0) {
                 JOptionPane.showMessageDialog(null, "未解析到有效引物：\n"
                         + "• BED 需 ≥3 列（chrom start end [name ...]）\n• FASTA header 需含区间（如 |chr1:1001-1020|）");
+                History.discardLast();   // v0.2.3：空导入不产生空撤销步
                 return;
             }
             PrimerStore.refreshAll();
@@ -377,6 +380,8 @@ public class ExportUtils {
             JOptionPane.showMessageDialog(null, "已导入 " + total + " 条引物（每个文件独立成轨，可分别编辑/导出/关闭）：\n" + msg + tail);
         } catch (Exception ex) {
             JOptionPane.showMessageDialog(null, "导入失败: " + ex.getMessage());
+        } finally {
+            History.resume();   // v0.2.3：无论成功/失败/早退都恢复记录
         }
     }
 

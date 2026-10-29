@@ -126,6 +126,8 @@ public class PrimerSession {
     /** 应用还原：打开 session 语义等同替换 → 先清干净现有引物轨与数据，再按 group 逐条重建。 */
     private static void apply(List<Object[]> entries) {
         try {
+            History.clear();   // v0.2.3：session 恢复不等同用户操作，旧撤销历史对新状态无意义
+            History.suspend(); // v0.2.3：本方法内 clear()/addAll() 不记录撤销步
             for (PrimerTrack t : new ArrayList<PrimerTrack>(PrimerTrack.ALL)) {
                 try {
                     TrackPanel tp = TrackPanel.getParentPanel(t);
@@ -139,13 +141,15 @@ public class PrimerSession {
                 @SuppressWarnings("unchecked")
                 List<Primer> list = (List<Primer>) en[1];
                 PrimerPlugin.ensureTrackForGroup(g);
-                PrimerStore.addAll(list);
+                PrimerStore.addAll(list, false);
                 PrimerStore.repairNumberedPairs(g);   // v0.1.63：session 恢复同样自愈编号配对
             }
             PrimerPlugin.ensureFallbackTrack();     // 保证「导入 BED」入口永在
             PrimerStore.refreshAll();
             try { IGV.getInstance().repaintDataPanels(); } catch (Throwable ignore) { }
         } catch (Throwable ignore) {
+        } finally {
+            History.resume();   // v0.2.3：无论是否异常都恢复记录
         }
     }
 }

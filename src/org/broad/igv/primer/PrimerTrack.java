@@ -229,6 +229,15 @@ public class PrimerTrack extends AbstractTrack {
         g.setFont(g.getFont().deriveFont(10f));
         for (ToolbarBtn b : btns) {
             toolbarBtns.put(b.id, b.rect);
+            if (b.icon) {   // v0.2.3：图形按钮（撤销/重做箭头），不画文字
+                boolean enabled = b.id.equals("undo") ? History.canUndo() : History.canRedo();
+                g.setColor(b.on ? new Color(200, 235, 200) : new Color(248, 248, 248));
+                g.fillRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
+                g.setColor(enabled ? new Color(120, 120, 120) : new Color(200, 200, 200));
+                g.drawRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
+                drawHistoryArrow(g, b.rect, b.id.equals("undo") ? -1 : 1, enabled);
+                continue;
+            }
             g.setColor(b.on ? new Color(200, 235, 200) : new Color(248, 248, 248));
             g.fillRect(b.rect.x, b.rect.y, b.rect.width, b.rect.height);
             g.setColor(b.on ? new Color(60, 140, 60) : new Color(120, 120, 120));
@@ -276,12 +285,34 @@ public class PrimerTrack extends AbstractTrack {
         return s.length() <= max ? s : s.substring(0, max - 1) + "…";
     }
 
+    /** v0.2.3：工具条撤销/重做图形按钮——画一个带「回卷钩」的箭头。dir=-1 指向左（撤销），+1 指向右（重做）。enabled=false 画浅灰（置灰不可用）。 */
+    private static void drawHistoryArrow(Graphics g, Rectangle r, int dir, boolean enabled) {
+        g.setColor(enabled ? new Color(40, 40, 64) : new Color(195, 195, 195));
+        int x0 = r.x + 4, x1 = r.x + r.width - 4;
+        int midY = r.y + r.height / 2;
+        int headX = dir < 0 ? x0 : x1;   // 箭头指向端
+        int tailX = dir < 0 ? x1 : x0;   // 尾端
+        int ahw = 5, ahh = 5;            // 箭头半宽/半高
+        g.drawLine(tailX, midY, headX - dir * ahw, midY);                 // 箭杆
+        int[] xs = {headX, headX - dir * ahw, headX - dir * ahw};
+        int[] ys = {midY, midY - ahh, midY + ahh};
+        g.fillPolygon(new java.awt.Polygon(xs, ys, 3));                    // 箭头三角
+        g.drawLine(tailX, midY, tailX, midY - 5);                         // 尾部向上的回卷钩
+        g.drawLine(tailX, midY - 5, tailX - dir * 3, midY - 5);
+    }
+
     /** 计算工具条（左侧 5 个动作按钮）布局；同时把按钮矩形写入 toolbarBtns 映射并在此记录按钮区结束 x（供参数框定位）。 */
     private java.util.List<ToolbarBtn> toolbarLayout(Rectangle bar) {
         java.util.List<ToolbarBtn> out = new java.util.ArrayList<ToolbarBtn>();
         int x = bar.x + 4;
         int y = bar.y + 4;
         int h = TOOLBAR_H - 8;
+        // v0.2.3：撤销/重做图形按钮（最左，常驻）；dir=-1 撤销（左箭头），+1 重做（右箭头）
+        int bw = 22;
+        out.add(new ToolbarBtn("undo", "", false, new Rectangle(x, y, bw, h), true));
+        x += bw + 3;
+        out.add(new ToolbarBtn("redo", "", false, new Rectangle(x, y, bw, h), true));
+        x += bw + 6;
         java.util.Map<String, String> defs = new java.util.LinkedHashMap<String, String>();
         boolean inEdit = PrimerEditTool.inEditMode();
         defs.put("edit", inEdit ? "退出编辑" : "进入编辑");
@@ -337,8 +368,12 @@ public class PrimerTrack extends AbstractTrack {
         String id, label;
         boolean on;
         Rectangle rect;
+        boolean icon;   // v0.2.3：图形按钮（箭头），不画文字
         ToolbarBtn(String id, String label, boolean on, Rectangle rect) {
-            this.id = id; this.label = label; this.on = on; this.rect = rect;
+            this(id, label, on, rect, false);
+        }
+        ToolbarBtn(String id, String label, boolean on, Rectangle rect, boolean icon) {
+            this.id = id; this.label = label; this.on = on; this.rect = rect; this.icon = icon;
         }
     }
 
@@ -1183,6 +1218,7 @@ public class PrimerTrack extends AbstractTrack {
                 for (final PrimerTrack t : others) {
                     moveMenu.add(item(t.groupLabel(), new Runnable() {
                         public void run() {
+                            History.recordUndo();   // v0.2.3：撤销/重做——跨轨移动前记录
                             PrimerStore.movePrimersToGroup(
                                     java.util.Collections.singletonList(moveSrc), t.getGroup());
                         }
@@ -1193,6 +1229,7 @@ public class PrimerTrack extends AbstractTrack {
                 for (final PrimerTrack t : others) {
                     copyMenu.add(item(t.groupLabel(), new Runnable() {
                         public void run() {
+                            History.recordUndo();   // v0.2.3：撤销/重做——跨轨复制前记录
                             PrimerStore.copyPrimersToGroup(
                                     java.util.Collections.singletonList(moveSrc), t.getGroup());
                         }
@@ -1751,7 +1788,13 @@ public class PrimerTrack extends AbstractTrack {
 
     /** 工具条按钮动作（与右键菜单对应项一致） */
     private void runToolbar(String id) {
-        if ("edit".equals(id)) {
+        if ("undo".equals(id)) {
+            History.undo();      // v0.2.3：撤销（按钮）；History.undo 内部已 refresh
+            return;
+        } else if ("redo".equals(id)) {
+            History.redo();      // v0.2.3：重做（按钮）
+            return;
+        } else if ("edit".equals(id)) {
             if (PrimerEditTool.inEditMode()) PrimerEditTool.exitEditMode();
             else PrimerEditTool.enterEditMode();
         } else if ("seq".equals(id)) {

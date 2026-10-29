@@ -386,6 +386,7 @@ public class AddPrimerDialog {
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
                         // v0.1.30：添加时不再自动跑 O(n²) 二聚体评估，仅在用户点击「评估二聚体」时按需计算
                     } else {
+                        History.recordUndo();   // v0.2.3：撤销/重做——记录编辑前状态
                         existing.name = name;
                         existing.chr = chr;
                         existing.start = s;
