@@ -1,4 +1,4 @@
-# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.2.1]
+# IGV 引物设计插件（IGV 2.3.80, Java 8）使用说明  [v0.2.2]
 
 ## 状态
 - 版本 **v0.2.1**（IGV 2.3.80, Java 8）。**版本规则：每新增/修改一个功能，版本号 +0.0.1，并独立 commit 一次。**
@@ -16,6 +16,14 @@
 
 #### v0.1.93 快捷键补全
 - 普通模式双击引物 = 直接编辑；方向键移动在普通模式选中即生效（帮助面板宣称项全部兑现）。
+
+#### v0.2.2 编辑模式单击引物常驻选区（与非编辑模式一致）
+- 背景：此前在**编辑模式**下点击某条引物，选区（贯穿全高的淡色框 + 红线参考线）只在「按住/拖拽期间」显示，松手即消失；而普通模式点击引物选区会常驻。用户希望两种模式行为一致——点一下就出现、且保持显示。
+- 根因：`PrimerEditTool.mouseReleased` 在拖动释放时**无条件调用 `clearGuides()`**（把 `selBox=false` 并隐藏 ruler），把刚点出来的选区当即抹掉；而 `mousePressed` 命中引物分支只 `setSelected` 没同步 `guides` 区间。
+- 修复：
+  - `mousePressed` 命中引物分支在 `setSelected(hit)` 后补 `setGuides(frame, hit.start, hit.end)`，点中即画框并把选区区间同步给 `guidePositions`（轨道内选区绘制/primer3 预填读取）。
+  - `mouseReleased` 删除无条件 `clearGuides()`，改为在拖动分支内用最终位置 `setGuides(rf, dragging.start, dragging.end)` 重画——单击或拖拽结束后选区都保留。空白点击仍走原 `mousePressed` 的 `clearGuides()` 清除（行为不变）。
+- 非编辑模式的选区逻辑由独立的 `ShiftSelector` 处理，未受影响。
 
 #### v0.2.1 全局异常捕获（诊断「点了没反应、无报错」）
 - 背景：IGV 用 `javaw` 启动，异常只进 stderr（不可见）；Swing 在 EDT 事件处理器里抛错会被静默吞掉，表现为「右键点了不弹窗、也没任何报错」，极难排查。

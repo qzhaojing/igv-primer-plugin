@@ -681,6 +681,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             Integer r0 = PrimerTrack.allScreenRows().get(hit);
             origRow = r0 == null ? 0 : r0;
             setSelected(hit);
+            // v0.2.2：点中引物即画出贯穿选区框（与非编辑模式一致），并同步 guides 区间供轨道内选区绘制读取
+            setGuides(frame, hit.start, hit.end);
             // v0.1.51：选中后把焦点抢回数据面板，否则焦点滞留搜索框等组件，方向键被其自身绑定吞掉
             dp.requestFocusInWindow();
             dp.repaint();
@@ -825,8 +827,11 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             return;
         }
         if (!SwingUtilities.isLeftMouseButton(e)) return;
-        clearGuides();
+        // v0.2.2：编辑模式下单击/拖拽引物后选区「常驻」（不再松手即清），与非编辑模式一致。
+        //        用最终位置重画 guides，使其保留在引物区间；空白点击仍会经 mousePressed 的 clearGuides 清除。
         if (dragging != null && mode != MODE_NONE) {
+            ReferenceFrame rf = frameOf(e);
+            if (rf != null) setGuides(rf, dragging.start, dragging.end);   // 重画到最终位置，保持常驻
             // v0.1.96：跨轨拖拽——松手落在另一条"有可见引物"的轨的纵向带内 → 整对迁移到该轨
             if (mode == MODE_MOVE) {
                 PrimerTrack tgt = PrimerTrack.trackAtScreenY(e.getY());
