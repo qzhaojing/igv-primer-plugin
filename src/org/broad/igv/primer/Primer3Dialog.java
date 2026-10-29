@@ -81,13 +81,22 @@ public class Primer3Dialog {
      * （"很多引物无法选区时想获得一个引物"的兜底路径；配合降级阶梯保证有产出）。
      */
     public static void open(int mode, boolean quick) {
+        open(mode, quick, null);
+    }
+
+    /**
+     * v0.1.96：sourceGroup 非 null 时，默认把设计结果放入该分组对应的轨（用户从某条引物轨发起设计，
+     * 结果就进那条轨，不再新建）；sourceGroup 为 null（手动添加轨 / 全局入口）时，分组名留空，
+     * 运行设计时解释为"放入手动添加轨"。给分组名留空也允许用户手填一个名字新建/指定轨道。
+     */
+    public static void open(int mode, boolean quick, String sourceGroup) {
         if (!Primer3Core.available()) {
             JOptionPane.showMessageDialog(IGV.getMainFrame(),
                     "primer3_core.exe 不可用（jar 资源缺失或无法释放到 ~/.igv_primer3/）。",
                     "primer3 设计", JOptionPane.ERROR_MESSAGE);
             return;
         }
-        new Dlg(mode, quick).setVisible(true);
+        new Dlg(mode, quick, sourceGroup).setVisible(true);
     }
 
     /**
@@ -511,6 +520,7 @@ public class Primer3Dialog {
     private static class Dlg extends JDialog {
         private final int mode;   // MODE_PAIR / MODE_LEFT / MODE_RIGHT
         private final boolean quick;   // v0.1.69：快速设计（无视选区，视口中心取 100bp）
+        private final String sourceGroup;   // v0.1.96：发起设计的源轨分组（null=手动添加轨/全局入口）
         private final JComboBox modeBox = new JComboBox(new String[]{"简单：指定产物区间", "高级：分别指定左/右端设计区"});
         private final JTextField chrF = new JTextField(6);
         private final JTextField groupF = new JTextField("primer3", 10);
@@ -565,10 +575,19 @@ public class Primer3Dialog {
         }
 
         Dlg(int mode, boolean quick) {
+            this(mode, quick, null);
+        }
+
+        Dlg(int mode, boolean quick, String sourceGroup) {
             super(IGV.getMainFrame(), titleOf(mode), true);
             this.mode = mode;
             this.quick = quick;
+            this.sourceGroup = sourceGroup;
             boolean single = (mode != MODE_PAIR);
+            // v0.1.96：从某条引物轨发起设计 → 默认结果就进那条轨（分组名预填为源轨分组）；
+            // 手动添加轨 / 全局入口（sourceGroup==null）→ 分组名留空（运行设计时解释为"手动添加轨"）。
+            // 用户仍可手改分组名，或清空后填新名新建轨道。
+            groupF.setText(sourceGroup == null ? "" : sourceGroup);
             setLayout(new BorderLayout(6, 6));
 
             // ---- 顶部：模式/chr/分组 ----
@@ -992,7 +1011,8 @@ public class Primer3Dialog {
                 String chr = chrF.getText().trim();
                 String group = groupF.getText().trim();
                 if (chr.isEmpty()) throw new Exception("染色体不能为空");
-                if (group.isEmpty()) group = "primer3";
+                // v0.1.96：分组名留空 = 放入手动添加轨（group==null）；非空 = 放入/新建该分组轨
+                if (group.isEmpty()) group = null;
                 if (lenMin > lenMax) throw new Exception("引物长 min > max");
                 if (tmMin > tmMax) throw new Exception("Tm min > max");
                 if (gcMin > gcMax) throw new Exception("GC min > max");
@@ -1132,7 +1152,7 @@ public class Primer3Dialog {
                     statusL.setText("警告: 模板含 N 比例 " + (nCount * 100 / seq.length()) + "%，设计结果可能不理想");
 
                 // ---- 调 primer3 ----
-                String p3id = group + "_" + chr;
+                String p3id = (group == null ? "manual" : group) + "_" + chr;
                 List<Primer3Core.Pair> pairs = Primer3Core.design(p3id, seq, params);
                 // v0.1.69：降条件自动重试——原始条件 0 对时逐级放宽筛选参数
                 // （区域约束不动），直到出结果或 6 级用尽。

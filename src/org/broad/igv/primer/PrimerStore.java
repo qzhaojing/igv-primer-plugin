@@ -140,6 +140,105 @@ public class PrimerStore {
         return cnt;
     }
 
+    // ---------- 跨轨移动 / 复制（v0.1.96） ----------
+
+    /** 分组相等判定（兼容 null：手动添加轨 group==null）。 */
+    private static boolean groupMatch(String a, String b) {
+        return (a == null) ? (b == null) : a.equals(b);
+    }
+
+    /** 在目标分组的已有名集合 used 中找一个不冲突的名称（冲突则追加 _2/_3…）。 */
+    private static String uniqueInGroup(String base, java.util.Set<String> used) {
+        if (base == null || base.isEmpty()) base = "P";
+        if (!used.contains(base)) { used.add(base); return base; }
+        for (int i = 2; i < 1000; i++) {
+            String c = base + "_" + i;
+            if (!used.contains(c)) { used.add(c); return c; }
+        }
+        String c = base + "_" + (System.currentTimeMillis() % 100000);
+        used.add(c);
+        return c;
+    }
+
+    /** 收集 p 自身 + 其全部配对伙伴（连同伙伴的伙伴，BFS），用于「整对迁移」。 */
+    private static void collectPair(Primer p, java.util.Set<Primer> out) {
+        if (p == null || out.contains(p)) return;
+        out.add(p);
+        if (p.pairedWith != null) {
+            for (String nm : p.pairedWith) {
+                Primer q = byName(nm);
+                if (q != null) collectPair(q, out);
+            }
+        }
+    }
+
+    /**
+     * v0.1.96：把一条（连同其配对伙伴的）引物整体迁移到目标分组对应的轨。
+     * 命名冲突时自动重命名（不覆盖目标轨同名引物）。迁移后配对边保留（同组内）。
+     * @param ps        起点引物列表（通常就一条；其配对伙伴会被一并迁移）
+     * @param target    目标分组（null = 手动添加轨）
+     */
+    public static synchronized void movePrimersToGroup(java.util.List<Primer> ps, String target) {
+        if (ps == null || ps.isEmpty()) return;
+        java.util.Set<Primer> todo = new java.util.LinkedHashSet<Primer>();
+        for (Primer p : ps) collectPair(p, todo);
+        if (todo.isEmpty()) return;
+        java.util.Set<String> used = new java.util.HashSet<String>();
+        for (Primer q : primers) if (groupMatch(q.group, target)) used.add(q.name);
+        // 先算新名字（避免冲突覆盖目标轨同名引物），再统一改写配对边（否则重名改名会断边）
+        java.util.Map<String, String> rename = new java.util.LinkedHashMap<String, String>();
+        for (Primer p : todo) {
+            String nn = uniqueInGroup(p.name, used);
+            rename.put(p.name, nn);
+            p.group = target;
+            p.name = nn;
+            p.rowOverride = null;   // 落到目标轨按自动布局，避免行号错位
+        }
+        for (Primer p : todo) remapEdges(p, rename);
+        resetDimerFlags();
+        refresh();
+        autosave(true);
+    }
+
+    /**
+     * v0.1.96：把一条（连同其配对伙伴的）引物整体复制到目标分组对应的轨（保留内部配对关系，名称去重）。
+     * @param ps      起点引物列表
+     * @param target  目标分组（null = 手动添加轨）
+     */
+    public static synchronized void copyPrimersToGroup(java.util.List<Primer> ps, String target) {
+        if (ps == null || ps.isEmpty()) return;
+        java.util.Set<Primer> todo = new java.util.LinkedHashSet<Primer>();
+        for (Primer p : ps) collectPair(p, todo);
+        if (todo.isEmpty()) return;
+        java.util.Set<String> used = new java.util.HashSet<String>();
+        for (Primer q : primers) if (groupMatch(q.group, target)) used.add(q.name);
+        // 先建副本并去重命名（保留内部配对靠原→副本体映射）
+        java.util.Map<String, Primer> copies = new java.util.LinkedHashMap<String, Primer>();
+        for (Primer p : todo) {
+            Primer c = p.copy();
+            c.pairedWith = new java.util.LinkedHashSet<String>();
+            c.name = uniqueInGroup(p.name, used);
+            used.add(c.name);
+            c.group = target;
+            c.rowOverride = p.rowOverride;
+            copies.put(p.name, c);
+        }
+        // 仅在本次复制集合内部的配对才连（跨集合的旧边不带入，避免连到原件）
+        for (Primer p : todo) {
+            Primer c = copies.get(p.name);
+            if (p.pairedWith == null) continue;
+            for (String partner : p.pairedWith) {
+                Primer pc = copies.get(partner);
+                if (pc != null) c.pairedWith.add(pc.name);
+            }
+        }
+        primers.addAll(copies.values());
+        for (Primer c : copies.values()) refreshSequence(c);
+        resetDimerFlags();
+        refresh();
+        autosave(true);
+    }
+
     // ---------- 自动保存（IGV session XML 不保存插件注入的 PrimerTrack，用它兜底防丢失） ----------
 
     private static long lastAutosave = 0;
@@ -550,7 +649,20 @@ public class PrimerStore {
      * 无匹配返回 1。BED 导入的同前缀名同样计入（续号全局一致）。
      */
     public static synchronized int nextPairNumber(String group) {
-        if (group == null) return 1;
+        if (group == null) {
+            // 手动添加轨（group==null）：扫全部引物名中 "P{n}" / "P{n}_F/_R" 的最大编号续号，
+            // 这样在手动轨上多次 primer3 设计不会总从 P1 重名（与命名轨逻辑一致）。
+            java.util.regex.Pattern pat = java.util.regex.Pattern.compile("^P(\\d+)(?:_[FR])?(?:_\\d+)?$");
+            int max = 0;
+            for (Primer p : primers) {
+                if (p.name == null) continue;
+                java.util.regex.Matcher m = pat.matcher(p.name);
+                if (m.find()) {
+                    try { max = Math.max(max, Integer.parseInt(m.group(1))); } catch (Exception ignore) { }
+                }
+            }
+            return max + 1;
+        }
         java.util.regex.Pattern pat = java.util.regex.Pattern.compile(
                 "^" + java.util.regex.Pattern.quote(group) + "_P(\\d+)(?:_[FR])?(?:_\\d+)?$");
         int max = 0;

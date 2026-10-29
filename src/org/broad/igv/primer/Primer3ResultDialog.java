@@ -163,9 +163,10 @@ public class Primer3ResultDialog {
             PrimerPlugin.ensureTrackForGroup(group);
             PrimerStore.addAll(add);
             boolean single = chosen.size() == 1 && chosen.get(0).isSingle();
+            String grpLabel = (group == null) ? "手动添加轨" : ("分组「" + group + "」");
             JOptionPane.showMessageDialog(this,
                     "已加入 " + chosen.size() + (single ? " 条引物" : " 对引物")
-                            + "（编号 " + nums + "，共 " + add.size() + " 条）到分组「" + group + "」。"
+                            + "（编号 " + nums + "，共 " + add.size() + " 条）到" + grpLabel + "。"
                             + (merged > 0
                             ? "\n已合并 " + merged + " 条重复引物（不同产物选中了同一条引物，配对改连保留引物）。" : "")
                             + "\n轨名带 * 表示未落盘：工具条「另存为」可保存为标准引物 BED。",

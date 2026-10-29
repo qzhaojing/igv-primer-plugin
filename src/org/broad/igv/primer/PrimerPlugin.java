@@ -29,7 +29,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class PrimerPlugin implements IGVPlugin {
 
     /** 插件版本号：显示在引物轨工具条最右侧（开发期对版用）。改功能时同步 +1。 */
-    public static final String VERSION = "v0.1.95";
+    public static final String VERSION = "v0.1.96";
 
     private static boolean inited = false;
     private static final Set<PrimerTrack> knownTracks = new LinkedHashSet<PrimerTrack>();
@@ -111,6 +111,11 @@ public class PrimerPlugin implements IGVPlugin {
         ensureFallbackTrack();
     }
 
+    /** v0.1.96：返回当前所有存活引物轨（供右键菜单枚举「移动到/复制到」目标轨）。 */
+    public static java.util.List<PrimerTrack> getKnownTracks() {
+        return new java.util.ArrayList<PrimerTrack>(knownTracks);
+    }
+
     /** v0.1.54：按分组取轨（无则返回 null）。 */
     public static PrimerTrack getTrackForGroup(String group) {
         if (group == null) {
@@ -159,10 +164,13 @@ public class PrimerPlugin implements IGVPlugin {
                     if (igv == null) return;
                     // v0.1.47：当前 session 换了另一份 → 从中还原引物轨（含分组/连线/布局/颜色）
                     PrimerSession.checkSessionSync(igv);
-                    // v0.1.45：一条轨都不剩时补一条手动轨（兼容被 IGV 原生方式删除/打开 session 清空的情况），
-                    // 保证「导入 BED」入口永远在，不会因最后一条轨被关而锁死。
-                    ensureFallbackTrack();
-                    // 重新挂载所有已知轨（session 打开会清空插件轨）
+                    // v0.1.96：统计面板当前还剩几条引物轨——
+                    // 用于区分「用户用 IGV 原生 Remove Track 删掉了某条」与「session 打开清空了全部」。
+                    int inPanel = 0;
+                    for (TrackPanel p : igv.getTrackPanels())
+                        for (Track tr : p.getTracks())
+                            if (tr instanceof PrimerTrack) inPanel++;
+                    // 逐条处理已知轨：在面板里 → 不动；不在 → 按下面规则处理
                     for (PrimerTrack t : new java.util.ArrayList<PrimerTrack>(knownTracks)) {
                         boolean present = false;
                         for (TrackPanel p : igv.getTrackPanels()) {
@@ -171,10 +179,20 @@ public class PrimerPlugin implements IGVPlugin {
                             }
                             if (present) break;
                         }
-                        if (!present) {
+                        if (present) continue;   // 仍在面板 → 不动
+                        if (inPanel >= 1 && t.getGroup() != null) {
+                            // 面板里还有别的轨，但本条不见了 → 这是用户用原生 Remove Track 删除的命名轨。
+                            // 原生删除不回调插件，这里补完语义：删除其引物并从注册表注销（让它真正消失）。
+                            PrimerStore.removeGroup(t.getGroup());
+                            forgetTrack(t);
+                        } else {
+                            // 面板已无任何引物轨（用户删了最后一条 / 打开 session 清空）→ 还原语义：原样挂回
                             try { igv.addTracks(Collections.singletonList(t), PanelName.DATA_PANEL); } catch (Throwable ignore) { }
                         }
                     }
+                    // v0.1.45：一条轨都不剩时补一条手动轨（兼容被 IGV 原生方式删除/打开 session 清空的情况），
+                    // 保证「导入 BED」入口永远在，不会因最后一条轨被关而锁死。
+                    ensureFallbackTrack();
                     // v0.1.65：session 重建数据面板后，给新 DataPanel 补挂 Shift 选区监听
                     try { PrimerEditTool.ensureShiftSelectors(); } catch (Throwable ignore) { }
                     // v0.1.68：快捷键监听保活（极端情况被摘时补挂）

@@ -662,6 +662,24 @@ public class PrimerTrack extends AbstractTrack {
         return m;
     }
 
+    /**
+     * v0.1.96：跨轨拖拽落点判定——给定鼠标屏幕 Y，返回其落在哪条引物轨的纵向带内（按该轨可见引物的
+     * 屏幕矩形 Y 范围判定）。要求目标轨在当前视图有可见引物（空轨无矩形则无法命中，需走右键菜单）。
+     * 命中返回该轨，否则 null。
+     */
+    static PrimerTrack trackAtScreenY(int y) {
+        for (PrimerTrack t : ALL) {
+            if (t.screenRects.isEmpty()) continue;
+            int minY = Integer.MAX_VALUE, maxY = Integer.MIN_VALUE;
+            for (Rectangle r : t.screenRects.values()) {
+                minY = Math.min(minY, r.y);
+                maxY = Math.max(maxY, r.y + r.height);
+            }
+            if (y >= minY && y <= maxY) return t;
+        }
+        return null;
+    }
+
     /** 跨所有轨命中测试（屏幕坐标） */
     static Primer hitTestAny(int x, int y, String chr) {
         for (PrimerTrack t : ALL) {
@@ -1151,6 +1169,39 @@ public class PrimerTrack extends AbstractTrack {
             }));
         }
 
+        // v0.1.96：跨轨移动 / 复制——选中/点中的引物整体（连同其配对伙伴）迁移或复制到另一条轨。
+        // 源轨与当前选中引物的轨一致时，子菜单列出其余所有轨；空轨（无可见引物）走此菜单，拖拽只覆盖有引物的目标轨。
+        final Primer moveSrc = (hit != null) ? hit
+                : ((PrimerStore.selected != null && PrimerStore.getPrimers().contains(PrimerStore.selected))
+                        ? PrimerStore.selected : null);
+        if (moveSrc != null) {
+            final java.util.List<PrimerTrack> others = new java.util.ArrayList<PrimerTrack>();
+            for (PrimerTrack t : PrimerPlugin.getKnownTracks())
+                if (!java.util.Objects.equals(t.getGroup(), moveSrc.group)) others.add(t);
+            if (!others.isEmpty()) {
+                JMenu moveMenu = new JMenu("移动该引物（含配对）到 ▸");
+                for (final PrimerTrack t : others) {
+                    moveMenu.add(item(t.groupLabel(), new Runnable() {
+                        public void run() {
+                            PrimerStore.movePrimersToGroup(
+                                    java.util.Collections.singletonList(moveSrc), t.getGroup());
+                        }
+                    }));
+                }
+                menu.add(moveMenu);
+                JMenu copyMenu = new JMenu("复制该引物（含配对）到 ▸");
+                for (final PrimerTrack t : others) {
+                    copyMenu.add(item(t.groupLabel(), new Runnable() {
+                        public void run() {
+                            PrimerStore.copyPrimersToGroup(
+                                    java.util.Collections.singletonList(moveSrc), t.getGroup());
+                        }
+                    }));
+                }
+                menu.add(copyMenu);
+            }
+        }
+
         if (hit != null) {
             menu.add(item("删除选中引物", new Runnable() {
                 public void run() {
@@ -1388,17 +1439,17 @@ public class PrimerTrack extends AbstractTrack {
         p3Menu.add(selHint);
         p3Menu.addSeparator();
         p3Menu.add(item("设计成对引物..." + selTag, new Runnable() {
-            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_PAIR); }
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_PAIR, false, PrimerTrack.this.group); }
         }));
         p3Menu.add(item("设计F向单引物(+)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
-            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT); }
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, false, PrimerTrack.this.group); }
         }));
         p3Menu.add(item("设计R向单引物(-)" + (selNow != null ? "（选区为引物区域）" : ""), new Runnable() {
-            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT); }
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_RIGHT, false, PrimerTrack.this.group); }
         }));
         // v0.1.69：无选区/懒得选区时的兜底——无视选区，按当前视口中心取 100bp 设计
         p3Menu.add(item("⚡ 快速设计：视口中心取引物（0 对自动降级重试）", new Runnable() {
-            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, true); }
+            public void run() { Primer3Dialog.open(Primer3Dialog.MODE_LEFT, true, PrimerTrack.this.group); }
         }));
         menu.add(p3Menu);
 
@@ -1711,7 +1762,8 @@ public class PrimerTrack extends AbstractTrack {
             ExportUtils.importBED();
         } else if ("p3".equals(id)) {
             // v0.1.57：工具条「设计」= 成对引物；单引物（F/R向）走右键菜单
-            Primer3Dialog.open(Primer3Dialog.MODE_PAIR);
+            // v0.1.96：把本轨分组传给设计框，结果默认进本轨（不再新建）
+            Primer3Dialog.open(Primer3Dialog.MODE_PAIR, false, PrimerTrack.this.group);
         } else if ("save".equals(id)) {
             ExportUtils.saveTrack(this);      // v0.1.54：回写来源文件（无则弹另存为）
         } else if ("saveas".equals(id)) {

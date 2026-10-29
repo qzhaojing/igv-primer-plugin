@@ -827,6 +827,18 @@ public class PrimerEditTool extends AbstractDataPanelTool {
         if (!SwingUtilities.isLeftMouseButton(e)) return;
         clearGuides();
         if (dragging != null && mode != MODE_NONE) {
+            // v0.1.96：跨轨拖拽——松手落在另一条"有可见引物"的轨的纵向带内 → 整对迁移到该轨
+            if (mode == MODE_MOVE) {
+                PrimerTrack tgt = PrimerTrack.trackAtScreenY(e.getY());
+                if (tgt != null && !java.util.Objects.equals(tgt.getGroup(), dragging.group)) {
+                    PrimerStore.movePrimersToGroup(java.util.Collections.singletonList(dragging), tgt.getGroup());
+                    dragging = null;
+                    mode = MODE_NONE;
+                    PrimerStore.refresh();
+                    refreshTooltip((DataPanel) e.getSource());
+                    return;
+                }
+            }
             boolean changed = dragging.start != origStart || dragging.end != origEnd;
             if (changed) {
                 PrimerStore.refreshSequence(dragging);

@@ -337,8 +337,10 @@ public class Primer3Core {
         public List<Primer> toPrimers(String chr, String group, int tmplOffset, Set<String> used, int pairNo) {
             List<Primer> out = new ArrayList<Primer>();
             int no = pairNo > 0 ? pairNo : idx + 1;
+            // group==null（手动添加轨）时命名不带 "null_" 前缀，直接用 P{no}_F / P{no}_R
+            String prefix = (group == null) ? ("P" + no) : (group + "_P" + no);
             if (leftSeq != null) {
-                String fn = unique(group + "_P" + no + "_F", used);
+                String fn = unique(prefix + "_F", used);
                 Primer f = new Primer(fn, chr, tmplOffset + leftStart, tmplOffset + leftStart + leftLen,
                         '+', "R1", leftLen, null);
                 f.group = group;
@@ -352,7 +354,7 @@ public class Primer3Core {
                 out.add(f);
                 if (rightSeq != null) {
                     // 成对：补 R 并互链
-                    String rn = unique(group + "_P" + no + "_R", used);
+                    String rn = unique(prefix + "_R", used);
                     Primer r = new Primer(rn, chr, tmplOffset + rightStart, tmplOffset + rightStart + rightLen,
                             '-', "R2", rightLen, null);
                     r.group = group;
