@@ -50,6 +50,11 @@ public class MfeReportDialog extends JDialog {
     private final boolean isPanel;
     /** 功能按钮栏（仅面板模式）：二聚体/发夹/特异性/覆盖度/质量检查 */
     private JPanel funcBar;
+    /** v0.1.98：面板顶部状态栏（显示已探测到的 MFEprimer 版本与支持的子命令） */
+    private JLabel mfeInfoLabel;
+    /** v0.1.98：功能按钮与其对应子命令（供按能力置灰） */
+    private final List<JButton> funcBtns = new ArrayList<JButton>();
+    private final List<String> funcSubs = new ArrayList<String>();
     /** 选项按钮栏（显示分段/隐藏/筛选/重新检测/导出），replaceContent 时重建 */
     private JPanel bar;
     private JButton reBtn;
@@ -92,9 +97,12 @@ public class MfeReportDialog extends JDialog {
         JPanel north = new JPanel();
         north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
         if (isPanel) {
+            mfeInfoLabel = new JLabel("MFEprimer：未配置路径（点击「⚙ 设置 MFEprimer 路径」填写）");
+            north.add(mfeInfoLabel);
             funcBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 4));
             addFuncButtons(funcBar);
             north.add(funcBar);
+            refreshMfeInfo();   // 若已持久化路径，则后台探测支持子命令
         }
         bar = new JPanel();
         north.add(bar);
@@ -259,16 +267,73 @@ public class MfeReportDialog extends JDialog {
                                 "尚未配置 MFEprimer 路径。\n请点击上方「⚙ 设置 MFEprimer 路径」按钮填写可执行文件绝对路径。");
                         return;
                     }
+                    // v0.1.98：按当前 MFEprimer 版本实际支持的子命令解析（spec/coverage 可能回退到 pcr）
+                    String actual = MfeCli.resolveSub(sub);
+                    if (actual == null) {
+                        JOptionPane.showMessageDialog(MfeReportDialog.this,
+                                "当前 MFEprimer 版本不支持「" + sub + "」子命令。\n"
+                                        + "请贴出 `mfeprimer --help` 输出，我据此适配命令。\n"
+                                        + "（面板顶部已显示该版本支持的子命令）");
+                        return;
+                    }
                     java.util.List<String> extra;
-                    if ("dimer".equals(sub)) extra = java.util.Collections.singletonList("-p");
-                    else if ("spec".equals(sub)) extra = MfeCli.defaultSpecArgs();
+                    if ("dimer".equals(actual)) extra = java.util.Collections.singletonList("-p");
+                    else if ("pcr".equals(actual)) extra = java.util.Collections.emptyList(); // pcr 仅需 -i + -d 基因组
+                    else if ("spec".equals(actual)) extra = MfeCli.defaultSpecArgs();
                     else extra = java.util.Collections.emptyList();
-                    lastSub = sub; lastTitle = t; lastExtra = extra;
+                    lastSub = actual; lastTitle = t; lastExtra = extra;
                     setFuncButtonsEnabled(false);   // 防抖：跑的时候禁用全部功能按钮
-                    PrimerStore.runMfeAssess(sub, t, extra, MfeReportDialog.this);
+                    PrimerStore.runMfeAssess(actual, t, extra, MfeReportDialog.this);
                 }
             });
             funcBar.add(b);
+            funcBtns.add(b);
+            funcSubs.add(sub);
+        }
+    }
+
+    /** v0.1.98：根据已探测到的 MFEprimer 支持子命令，置灰不支持的功能按钮，并更新状态栏。 */
+    private void refreshMfeInfo() {
+        if (mfeInfoLabel == null) return;
+        String path = PrimerStore.mfeExePath;
+        if (path == null || path.trim().isEmpty()) {
+            mfeInfoLabel.setText("MFEprimer：未配置路径（点击「⚙ 设置 MFEprimer 路径」填写）");
+            setFuncEnabledByCapability();
+            return;
+        }
+        if (MfeCli.isProbed()) { updateMfeInfoFromProbe(); return; }
+        mfeInfoLabel.setText("MFEprimer：探测支持子命令中…");
+        new SwingWorker<Void, Void>() {
+            protected Void doInBackground() { MfeCli.forceProbe(); return null; }
+            protected void done() { updateMfeInfoFromProbe(); }
+        }.execute();
+    }
+
+    private void updateMfeInfoFromProbe() {
+        String v = MfeCli.probeVersion();
+        String subs = MfeCli.supportedSummary();
+        mfeInfoLabel.setText("MFEprimer " + (v.isEmpty() ? "(版本未知)" : v)
+                + " | 支持子命令: " + (subs.isEmpty() ? "(探测失败)" : subs));
+        setFuncEnabledByCapability();
+    }
+
+    /** 按能力置灰功能按钮：不支持的按钮 disabled + 提示；spec/coverage 回退到 pcr 的改 tooltip。 */
+    private void setFuncEnabledByCapability() {
+        if (!MfeCli.isProbed()) return;   // 还没探测完，先不改动
+        for (int i = 0; i < funcBtns.size(); i++) {
+            JButton b = funcBtns.get(i);
+            String sub = funcSubs.get(i);
+            String actual = MfeCli.resolveSub(sub);
+            if (actual == null) {
+                b.setEnabled(false);
+                b.setToolTipText("当前 MFEprimer 版本不支持「" + sub + "」子命令");
+            } else {
+                b.setEnabled(true);
+                if (!actual.equals(sub))
+                    b.setToolTipText("运行 MFEprimer " + actual + "（当前版本以 " + actual + " 替代 " + sub + "）");
+                else
+                    b.setToolTipText("运行 MFEprimer " + sub);
+            }
         }
     }
 
@@ -301,6 +366,7 @@ public class MfeReportDialog extends JDialog {
         else
             JOptionPane.showMessageDialog(MfeReportDialog.this, "已保存 MFEprimer 路径：\n" + path
                     + "\n\n可直接点击上方功能按钮开始评估。");
+        refreshMfeInfo();   // v0.1.98：路径变更后重新探测支持子命令并刷新状态栏/按钮
     }
 
     private void setFuncButtonsEnabled(boolean en) {
