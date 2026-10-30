@@ -963,6 +963,26 @@ public class PrimerTrack extends AbstractTrack {
             g.drawRect(x0 - 2, y - 3, w + 4, h + 8);
         }
 
+        // v0.2.5：突变位点标记 —— 在引物箭头本体上按突变碱基的基因组位置画红色竖条，
+        // 让 track 上一眼看出哪段与参考不一致（与编辑框比对显示呼应：红=突变/不覆盖简并）。
+        // 仅标 MISMATCH 与 DEGENERATE_MM（确属与参考不一致）；DEGENERATE 覆盖参考，不标。
+        if (p.seq != null && !p.seq.isEmpty()) {
+            PrimerMismatch.Result mr = PrimerMismatch.compare(p);
+            if (mr.ok && mr.kind != null) {
+                int seqLen = Math.min(p.seq.length(), mr.kind.length);
+                for (int i = 0; i < seqLen; i++) {
+                    int k = mr.kind[i];
+                    if (k != PrimerMismatch.MISMATCH && k != PrimerMismatch.DEGENERATE_MM) continue;
+                    int gpos = (p.strand == '+') ? (p.start + i) : (p.end - 1 - i);
+                    int mx = ctx.bpToScreenPixel(gpos);
+                    if (mx < x0 - 1 || mx > x1 + 1) continue;   // 落箭头范围外不画
+                    g.setColor(new Color(0xD0, 0x00, 0x00));
+                    g.fillRect(mx - 1, y - 2, 2, h + 4);        // 2px 宽竖条，略超出箭头高度
+                    g.fillRect(mx - 2, y - 4, 4, 2);            // 顶部小方块强化
+                }
+            }
+        }
+
         // v0.1.31：标签只显示引物名——Tm/GC/测序长度等详细信息移入悬浮提示框（getValueStringAt），保持画面清爽
         // v0.1.31：名称统一冷静的深蓝灰（fail 状态由浅红轮廓+悬停框表达，名称不再用红色）
         g.setColor(new Color(0x2E, 0x4A, 0x62));

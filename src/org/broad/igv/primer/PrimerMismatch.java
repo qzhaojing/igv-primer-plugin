@@ -99,35 +99,58 @@ public class PrimerMismatch {
         return r;
     }
 
-    /** 着色 HTML（<pre> 等宽）：突变=红、简并=紫、其余=深灰。 */
+    /**
+     * 突变比对显示（编辑框内 JEditorPane, text/html）。
+     * <p>设计：oligo 行把突变碱基用「红底 + 红字 + 加粗」高亮，简并用紫色，一眼可辨；
+     * 比对行用 '.' 表示与参考一致、空格（空白）表示不一致 —— 虚线在突变处断开，
+     * 立刻定位突变位点。
+     * <p>⚠️ 不用 {@code <pre>} 包裹：Java 的 HTMLEditorKit 会在 {@code <pre>} 内丢弃
+     * 内联 font/span 颜色，导致整行变黑（这正是之前"看不出突变"的根因）。改用
+     * div + &amp;nbsp; 既保等宽对齐、又让内联颜色正常渲染。
+     */
     public static String toHtml(Result r) {
-        if (r == null || r.oligo.isEmpty()) return "<html><pre>（无序列）</pre></html>";
+        if (r == null || r.oligo.isEmpty()) {
+            return "<html><body style='font-family:Monospaced;font-size:12px'>（无序列）</body></html>";
+        }
         StringBuilder sb = new StringBuilder();
-        sb.append("<html><pre style='font-family:Monospaced;font-size:12px'>");
-        sb.append("5'- ");
+        sb.append("<html><body style='font-family:Monospaced;font-size:12px;line-height:15px'>");
+        // 行1：oligo —— 突变碱基红底高亮，简并紫色
+        sb.append("5'-&nbsp;");
         for (int i = 0; i < r.oligo.length(); i++) {
             char o = r.oligo.charAt(i);
             int k = (i < r.kind.length) ? r.kind[i] : MATCH;
-            String color = (k == MISMATCH || k == DEGENERATE_MM) ? "#d11"
-                    : (k == DEGENERATE ? "#82a" : "#222");
-            sb.append("<font color='").append(color).append("'>").append(o).append("</font>");
+            if (k == MISMATCH || k == DEGENERATE_MM) {
+                sb.append("<span style='background-color:#ffd24d;color:#d00;font-weight:bold'>").append(o).append("</span>");
+            } else if (k == DEGENERATE) {
+                sb.append("<span style='color:#9b4dc6;font-weight:bold'>").append(o).append("</span>");
+            } else {
+                sb.append(o);
+            }
         }
-        sb.append(" -3'\n");
+        sb.append("&nbsp;-3'<br>");
+        // 行2：参考序列（淡化，仅供对照实际参考碱基）
         if (r.ok && !r.ref.isEmpty()) {
-            sb.append("    ").append(r.ref).append("\n");
+            sb.append("&nbsp;&nbsp;&nbsp;&nbsp;");
+            sb.append("<span style='color:#999'>").append(r.ref).append("</span>").append("<br>");
+            // 行3：比对行 —— '.' = 一致，空格(空白) = 不一致
             int n = Math.min(r.oligo.length(), r.ref.length());
-            sb.append("    ");
+            sb.append("&nbsp;&nbsp;&nbsp;&nbsp;");
             for (int i = 0; i < n; i++) {
                 int k = r.kind[i];
-                sb.append((k == MISMATCH || k == DEGENERATE_MM) ? "^" : " ");
+                sb.append((k == MISMATCH || k == DEGENERATE_MM) ? "&nbsp;" : ".");
             }
-            sb.append("\n");
+            sb.append("<br>");
         }
-        sb.append("</pre>");
+        // 图例
+        sb.append("<span style='font-size:11px;color:#666'>");
+        sb.append("<span style='background-color:#ffd24d;color:#d00;font-weight:bold'>红底碱基</span>=突变&nbsp;&nbsp;");
+        sb.append("<span style='color:#9b4dc6;font-weight:bold'>紫</span>=简并&nbsp;&nbsp;");
+        sb.append("比对行&nbsp;.&nbsp;=一致&nbsp;&nbsp;空格=突变");
+        sb.append("</span>");
         if (!r.ok || !r.note.isEmpty()) {
-            sb.append("<font color='#a70'>").append(r.note).append("</font>");
+            sb.append("<br><span style='color:#a70'>").append(r.note).append("</span>");
         }
-        sb.append("</html>");
+        sb.append("</body></html>");
         return sb.toString();
     }
 
