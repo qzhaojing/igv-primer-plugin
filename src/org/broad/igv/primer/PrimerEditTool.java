@@ -476,6 +476,8 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             if (delta != 0) {
                 sel.start += delta;
                 sel.end += delta;
+                sel.seqLocked = false;   // v0.2.9：键盘移动=重新取参考序列，作废手动编辑
+                sel.seq = null;
                 PrimerStore.refreshSequence(sel);
             }
         }
@@ -862,6 +864,9 @@ public class PrimerEditTool extends AbstractDataPanelTool {
             }
             boolean changed = dragging.start != origStart || dragging.end != origEnd;
             if (changed) {
+                // v0.2.9：滑动/缩放=重新按新坐标取参考序列，并作废此前手动编辑/导入锁定的突变信息
+                dragging.seqLocked = false;
+                dragging.seq = null;
                 PrimerStore.refreshSequence(dragging);
                 PrimerStore.resetDimerFlags();   // 序列可能变化：清陈旧二聚体标记（按需评估才重算）
             } else if (!crossTrack) {

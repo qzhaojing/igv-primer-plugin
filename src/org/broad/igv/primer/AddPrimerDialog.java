@@ -103,10 +103,16 @@ public class AddPrimerDialog {
         seqArea.setLineWrap(true);
         seqArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JScrollPane seqScroll = new JScrollPane(seqArea);
+        seqScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);  // v0.2.9：行已自动换行，禁横向滚动条防抖动
         final boolean[] prog = {false};   // 程序化写入 seqArea 时抑制其 DocumentListener
         final javax.swing.JEditorPane mmPane = new javax.swing.JEditorPane("text/html", "");
         mmPane.setEditable(false);
         mmPane.setPreferredSize(new java.awt.Dimension(360, 64));
+        // v0.2.9：固定尺寸 + 禁用滚动条——HTML 内容高度固定（3 行），不让它驱动外层布局抖动死循环
+        final JScrollPane mmScroll = new JScrollPane(mmPane);
+        mmScroll.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        mmScroll.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_NEVER);
+        mmScroll.setPreferredSize(new java.awt.Dimension(360, 64));
         final JLabel seqWarn = new JLabel("");   // 非法字符警告（红）
         seqWarn.setForeground(Color.RED);
         final JLabel mmInfo = new JLabel("");    // 突变摘要（正常色）
@@ -140,7 +146,7 @@ public class AddPrimerDialog {
         gce.fill = GridBagConstraints.HORIZONTAL;
         gce.weightx = 1.0;
         addRow(evalGrid, gce, r3++, "序列", seqScroll);   // 序列框横向撑满左栏，便于展开查看
-        addRow(evalGrid, gce, r3++, "突变比对", new JScrollPane(mmPane));
+        addRow(evalGrid, gce, r3++, "突变比对", mmScroll);
         addRow(evalGrid, gce, r3++, "", seqWarn);
         addRow(evalGrid, gce, r3++, "", mmInfo);
         gce.fill = GridBagConstraints.NONE;
@@ -186,6 +192,57 @@ public class AddPrimerDialog {
         // 当前展示用的引物对象（preview / eval 结果）
         final Primer[] cur = {null};
 
+        // v0.2.9：防抖/安全写辅助集中声明（display 会调用 setSeqText，故须早于 display）。
+        // 从当前输入框构建临时引物并刷新区间+指标+突变比对（程序化 setText 时跳过避免回环）
+        final Runnable rebuildFromSeq = new Runnable() {
+            public void run() {
+                try {
+                    String cleaned = PrimerMismatch.clean(seqArea.getText());
+                    boolean okv = PrimerMismatch.valid(seqArea.getText());
+                    seqWarn.setText(okv ? "" : "含非法字符（仅 A/C/G/T 及简并码 RYSWKMBDHVN，U→T）");
+                    Primer p = cur[0];
+                    if (p == null) {
+                        p = new Primer();
+                        p.name = nameF.getText().trim();
+                        p.chr = chrF.getText().trim();
+                        try { p.start = Integer.parseInt(startF.getText().trim()); } catch (Exception ignore) {}
+                        try { p.end = Integer.parseInt(endF.getText().trim()); } catch (Exception ignore) {}
+                        p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
+                        cur[0] = p;
+                    }
+                    int len = cleaned.length();
+                    if (len > 0) {
+                        if (p.strand == '+') p.end = p.start + len; else p.start = p.end - len;
+                    }
+                    if (okv) p.seq = cleaned;   // 非法时不覆盖，保留上次合法值供比对
+                    try { PrimerMetrics.evaluate(p); } catch (Exception ignore) {}
+                    tmL.setText(fmt(p.tm));
+                    gcL.setText(fmt(p.gc) + (Double.isNaN(p.gc) ? "" : "%"));
+                    renderMismatch(p, mmPane, mmInfo);
+                } catch (Exception ignore) {}
+            }
+        };
+
+        // 序列框自身的 DocumentListener（仅用户编辑时跑 rebuildFromSeq；程序化写入靠 remove/add 守护）
+        final javax.swing.event.DocumentListener seqDl = new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+        };
+        seqArea.getDocument().addDocumentListener(seqDl);
+
+        // v0.2.9：安全写序列框——摘掉自身 listener、仅内容变化才写、写完装回，杜绝回环与闪烁
+        final Runnable setSeqText = new Runnable() {
+            public void run() {
+                String s = (cur[0] == null || cur[0].seq == null) ? "" : cur[0].seq;
+                if (!s.equals(seqArea.getText())) {
+                    seqArea.getDocument().removeDocumentListener(seqDl);
+                    seqArea.setText(s);
+                    seqArea.getDocument().addDocumentListener(seqDl);
+                }
+            }
+        };
+
         // 名称实时校验：空 / 重名 → 提示并禁用「添加/更新」
         final Runnable updateNameStatus = new Runnable() {
             public void run() {
@@ -220,7 +277,7 @@ public class AddPrimerDialog {
                     statusL.setText("—"); statusL.setForeground(Color.BLUE);
                     return;
                 }
-                seqArea.setText(p.seq == null ? "" : p.seq);
+                setSeqText.run();   // v0.2.9：安全写入（摘 listener + 内容不变不写），杜绝回环/闪烁
                 tmL.setText(fmt(p.tm));
                 gcL.setText(fmt(p.gc) + (Double.isNaN(p.gc) ? "" : "%"));
                 hairL.setText(String.format("%.1f", p.hairpinDG));
@@ -345,53 +402,28 @@ public class AddPrimerDialog {
             }
         };
 
-        // v0.2.4：序列框编辑 → 实时重算区间（固定 5' 端）+ 指标 + 突变比对（不回写序列框，避免光标跳动）
-        final Runnable rebuildFromSeq = new Runnable() {
-            public void run() {
-                try {
-                    String cleaned = PrimerMismatch.clean(seqArea.getText());
-                    boolean okv = PrimerMismatch.valid(seqArea.getText());
-                    seqWarn.setText(okv ? "" : "含非法字符（仅 A/C/G/T 及简并码 RYSWKMBDHVN，U→T）");
-                    Primer p = cur[0];
-                    if (p == null) {
-                        p = new Primer();
-                        p.name = nameF.getText().trim();
-                        p.chr = chrF.getText().trim();
-                        try { p.start = Integer.parseInt(startF.getText().trim()); } catch (Exception ignore) {}
-                        try { p.end = Integer.parseInt(endF.getText().trim()); } catch (Exception ignore) {}
-                        p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
-                        cur[0] = p;
-                    }
-                    int len = cleaned.length();
-                    if (len > 0) {
-                        if (p.strand == '+') p.end = p.start + len; else p.start = p.end - len;
-                    }
-                    if (okv) p.seq = cleaned;   // 非法时不覆盖，保留上次合法值供比对
-                    try { PrimerMetrics.evaluate(p); } catch (Exception ignore) {}
-                    tmL.setText(fmt(p.tm));
-                    gcL.setText(fmt(p.gc) + (Double.isNaN(p.gc) ? "" : "%"));
-                    renderMismatch(p, mmPane, mmInfo);
-                } catch (Exception ignore) {}
-            }
+        // v0.2.9：updatePreview 防抖——坐标/方向变化合并到一次刷新，避免每次 keystroke 跑全体系二聚体评估阻塞 EDT（抖动根因）。
+        // 须定义在 updatePreview 之后：匿名 Timer 监听引用它，需在其作用域内。
+        final javax.swing.Timer previewTimer = new javax.swing.Timer(90, new java.awt.event.ActionListener() {
+            public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
+        });
+        previewTimer.setRepeats(false);
+        final Runnable schedulePreview = new Runnable() {
+            public void run() { if (previewTimer.isRunning()) previewTimer.restart(); else previewTimer.start(); }
         };
 
-        // 输入变化即刷新序列与单引物指标
+        // v0.2.9：坐标/方向/角色变化 → 防抖刷新（合并高频事件，避免每键都跑全体系二聚体评估阻塞 EDT）
         javax.swing.event.DocumentListener dl = new javax.swing.event.DocumentListener() {
-            public void insertUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
-            public void removeUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
-            public void changedUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { schedulePreview.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { schedulePreview.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { schedulePreview.run(); }
         };
         chrF.getDocument().addDocumentListener(dl);
         startF.getDocument().addDocumentListener(dl);
         endF.getDocument().addDocumentListener(dl);
-        // v0.2.4：序列框编辑 → 重算区间+突变比对（prog 为 true 时由 updatePreview 程序化写入，跳过避免回环）
-        seqArea.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
-            public void insertUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
-            public void removeUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
-            public void changedUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
-        });
+        // 序列框的 DocumentListener 已在上方（seqDl）注册，这里不再重复添加
         ActionListener al = new ActionListener() {
-            public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
+            public void actionPerformed(java.awt.event.ActionEvent e) { schedulePreview.run(); }   // v0.2.9：防抖
         };
         strandC.addActionListener(al);
         roleC.addActionListener(al);
