@@ -202,19 +202,27 @@ public class PrimerMismatch {
         return r;
     }
 
-    /** 等宽单元格（统一 22px 宽 + 居中，保证 oligo/ref/结构 三行严格对齐；`---` 也可容纳）。 */
-    private static String cell(String ch, String extra) {
-        return "<span style='display:inline-block;width:22px;text-align:center;" + extra + "'>" + ch + "</span>";
+    /**
+     * 单字符单元格（等宽靠 Monospaced 字体本身保证，不依赖任何 CSS 布局属性）。
+     * ⚠️ 绝不用 display:inline-block / width / border-radius / 中文 / 多字符（这些在 Java HTMLEditorKit 下
+     *    会破坏等宽对齐，导致三行错位——v0.2.7 的"乱七八糟"即源于此）。
+     */
+    private static String cell(char c, String color, String bg) {
+        StringBuilder s = new StringBuilder("<span style='");
+        if (color != null) s.append("color:").append(color).append(";");
+        if (bg != null) s.append("background-color:").append(bg).append(";");
+        s.append("'>").append(c == ' ' ? "&nbsp;" : String.valueOf(c)).append("</span>");
+        return s.toString();
     }
 
     /**
      * 突变比对显示（编辑框内 JEditorPane, text/html）。
+     * 三行严格按"每列一个字符"对齐（Monospaced 字体天然等宽）：
      * <ul>
-     *   <li>oligo 行：突变=红底红字加粗、简并=紫、插入=青底青字（环）、缺失位置显灰点。</li>
-     *   <li>ref 行：参考序列（淡化）。</li>
-     *   <li>指示行：'.'=一致、空格=突变（断口）、'o'=插入(环, 青)、'x'=缺失(橙)。</li>
+     *   <li>引物行 5'→3'：突变=红底红字、简并=紫、插入=青底（引物比参考多出的碱基，即"环/凸起"）、缺失列=灰 '-'。</li>
+     *   <li>参考行：淡化灰；引物缺失处参考多出碱基=橙底（即"缺口/环"的另一半）。</li>
+     *   <li>结构行：'^'=插入、'_'=缺失、'.'=一致、空格=突变（断口）。</li>
      * </ul>
-     * ⚠️ 不用 {@code <pre>}：HTMLEditorKit 会在 {@code <pre>} 内丢弃内联颜色（即之前"全黑"根因）。
      */
     public static String toHtml(Result r) {
         if (r == null || r.oligo.isEmpty()) {
@@ -225,63 +233,55 @@ public class PrimerMismatch {
         int n = (r.kind == null) ? 0 : r.kind.length;
         StringBuilder sb = new StringBuilder();
         sb.append("<html><body style='font-family:Monospaced;font-size:11px;line-height:16px'>");
-        String LBL = "<span style='display:inline-block;width:56px;color:#444'>";
-
-        // 行1：引物（5'→3'）—— 突变红底、简并紫、插入=青色凸起块(环)、缺失=橙色 --- 缺口
-        //      （即用户要的「引物中间凸起一块 / 引物中间有缺失符号---」）
-        sb.append(LBL).append("引物5'-</span>");
+        // 三行统一前缀宽度：行1 "5'- "（4字符），行2/3 用 4 空格，保证三行序列列对齐
+        // 行1：引物（5'→3'）
+        sb.append("5'- ");
         for (int c = 0; c < n; c++) {
             char o = r.oligo.charAt(c);
             int k = r.kind[c];
             if (o == '-') {
-                // 缺失：引物此处比参考少碱基 → 橙色缺口 ---
-                sb.append(cell("---", "color:#e07b00;font-weight:bold"));
+                sb.append(cell('-', "#bbb", null));            // 缺失列：引物此处无碱基
             } else if (k == MISMATCH || k == DEGENERATE_MM) {
-                sb.append(cell(String.valueOf(o), "background-color:#ffd24d;color:#d00;font-weight:bold"));
+                sb.append(cell(o, "#d00", "#ffd24d"));          // 突变：红底红字
             } else if (k == DEGENERATE) {
-                sb.append(cell(String.valueOf(o), "color:#9b4dc6;font-weight:bold"));
+                sb.append(cell(o, "#9b4dc6", null));            // 简并：紫
             } else if (k == INSERTION) {
-                // 插入：引物比参考多碱基 → 青色凸起块（"环状/凸出"）
-                sb.append(cell(String.valueOf(o), "background-color:#c8f0f5;color:#007a8a;font-weight:bold;border:1px solid #007a8a;border-radius:4px"));
+                sb.append(cell(o, "#007a8a", "#c8f0f5"));        // 插入：青底（环/凸起）
             } else {
-                sb.append(cell(String.valueOf(o), ""));
+                sb.append(cell(o, "#222", null));               // 一致
             }
         }
-        sb.append("-3'<br>");
-
-        // 行2：参考 —— 与引物互补：引物插入处参考为缺口 ---，引物缺失处参考多出(环)碱基
-        sb.append(LBL).append("参考  </span>");
+        sb.append(" -3'<br>");
+        // 行2：参考
+        sb.append("    ");
         for (int c = 0; c < n; c++) {
             char rf = r.ref.charAt(c);
             if (rf == '-') {
-                sb.append(cell("---", "color:#e07b00;font-weight:bold"));
+                sb.append(cell('-', "#bbb", null));            // 插入列：参考此处无碱基
             } else if (r.kind[c] == DELETION) {
-                // 引物缺失处：参考多出碱基 → 方框(环)
-                sb.append(cell(String.valueOf(rf), "background-color:#fff0e0;color:#e07b00;border:1px solid #e07b00;border-radius:4px"));
+                sb.append(cell(rf, "#e07b00", "#fff0e0"));       // 缺失列：参考多出碱基（橙底=缺口/环）
             } else {
-                sb.append(cell(String.valueOf(rf), "color:#999"));
+                sb.append(cell(rf, "#999", null));
             }
         }
         sb.append("<br>");
-
-        // 行3：结构指示 —— 凸=插入(环)、─=缺失(缺口)、.=一致、空格=突变(断口)
-        sb.append(LBL).append("结构  </span>");
+        // 行3：结构指示（全 ASCII 单字符）
+        sb.append("    ");
         for (int c = 0; c < n; c++) {
             int k = r.kind[c];
-            if (k == INSERTION) sb.append(cell("凸", "color:#007a8a;font-weight:bold"));
-            else if (k == DELETION) sb.append(cell("─", "color:#e07b00;font-weight:bold"));
-            else if (k == MATCH) sb.append(cell(".", "color:#999"));
-            else sb.append(cell("&nbsp;", "color:#999"));  // 突变：断口
+            if (k == INSERTION) sb.append(cell('^', "#007a8a", null));
+            else if (k == DELETION) sb.append(cell('_', "#e07b00", null));
+            else if (k == MATCH) sb.append(cell('.', "#999", null));
+            else sb.append(cell(' ', "#999", null));            // 突变：断口（空格）
         }
         sb.append("<br>");
-
         // 图例
         sb.append("<span style='font-size:11px;color:#666'>");
-        sb.append("<span style='background-color:#ffd24d;color:#d00;font-weight:bold'>红底</span>=突变&nbsp;");
-        sb.append("<span style='color:#9b4dc6;font-weight:bold'>紫</span>=简并&nbsp;");
-        sb.append("<span style='background-color:#c8f0f5;color:#007a8a;font-weight:bold;border:1px solid #007a8a;border-radius:4px'>青凸</span>=插入(引物多出/环)&nbsp;");
-        sb.append("<span style='color:#e07b00;font-weight:bold'>---</span>=缺失(引物缺口)&nbsp;");
-        sb.append("结构行&nbsp;凸=插入&nbsp;─=缺失&nbsp;.&nbsp;=一致&nbsp;&nbsp;空格=突变");
+        sb.append("<span style='background-color:#ffd24d;color:#d00'>红底</span>=突变&nbsp;");
+        sb.append("<span style='color:#9b4dc6'>紫</span>=简并&nbsp;");
+        sb.append("<span style='background-color:#c8f0f5;color:#007a8a'>青底</span>=插入(引物多出/环)&nbsp;");
+        sb.append("<span style='background-color:#fff0e0;color:#e07b00'>橙底</span>=缺失(引物缺口)&nbsp;");
+        sb.append("结构行 ^插入 _缺失 .一致 空格=突变");
         sb.append("</span>");
         if (!r.ok || !r.note.isEmpty()) {
             sb.append("<br><span style='color:#a70'>").append(r.note.isEmpty() ? "（未比对）" : r.note).append("</span>");
