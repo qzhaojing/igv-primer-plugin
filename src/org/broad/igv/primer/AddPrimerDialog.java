@@ -255,17 +255,27 @@ public class AddPrimerDialog {
                     p.chr = chr; p.start = s; p.end = e;
                     p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
                     p.role = (String) roleC.getSelectedItem();
-                    // v0.2.4：编辑已锁定的引物时，沿用其自定义序列（含突变/简并），不从基因组重推
-                    String rawSeq = (existing != null && existing.seqLocked && existing.seq != null)
-                            ? existing.seq : readSeqFromGenome(chr, s, e);
-                    // v0.1.43：预览序列也存实际引物（R 反向互补），与导出/指标一致
-                    p.seq = (p.strand == '+' || rawSeq.isEmpty()) ? rawSeq : PrimerMetrics.revComp(rawSeq);
+                    // v0.2.7：点击图形进入编辑框时，内存里必有此引物的序列（含突变/简并/已锁定），优先直接用；
+                    // 仅当内存无序列时才回退参考基因组读取。existing.seq 已是 5'→3' 实际寡核苷酸，不可再反向互补。
+                    String rawSeq;
+                    if (existing != null && existing.seq != null && !existing.seq.isEmpty()) {
+                        rawSeq = existing.seq;
+                    } else {
+                        String g = readSeqFromGenome(chr, s, e);
+                        rawSeq = (p.strand == '+' || g.isEmpty()) ? g : PrimerMetrics.revComp(g);
+                    }
+                    p.seq = rawSeq;
                     PrimerMetrics.evaluate(p);
                     cur[0] = p;
                     prog[0] = true;          // v0.2.4：抑制 seqArea 的程序化写入触发 rebuildFromSeq
                     display.run();
                     prog[0] = false;
                     renderMismatch(p, mmPane, mmInfo);
+                    // v0.2.7：序列仍取不到时给明确提示，而不是悄悄全显示 "—"
+                    if (p.seq == null || p.seq.isEmpty()) {
+                        seqWarn.setText("未能获取序列：请确认参考基因组已加载、染色体/坐标正确；"
+                                + "若此引物曾手动改过序列，请点「更新」重新保存以持久化");
+                    }
 
                     // self-dimer 形状（始终自动显示）
                     PrimerMetrics.DimerShape selfSh = PrimerMetrics.dimerShape(p.seq, p.seq);
