@@ -429,6 +429,7 @@ public class ExportUtils {
             String aId = null;
             String tailName = null;   // v0.1.72：|t 本条 5′ 附加条目名
             String tailSeq = null;    // v0.1.72：|x 本条自定义 5′ 附加序列
+            String seqOverride = null;   // v0.2.4：|s 本条锁定的实际寡核苷酸序列（5'->3'）
             java.util.List<String> partners = new java.util.ArrayList<String>();  // v0.1.46：先收集，引物入列后再写 pairedWith
             if (name.indexOf('|') > 0) {
                 String[] parts = name.split("\\|");
@@ -462,12 +463,15 @@ public class ExportUtils {
                     } else if (seg.startsWith("x") && seg.length() > 1) {
                         // v0.1.72：|x本条自定义 5′ 附加序列（优先于 |t）
                         tailSeq = seg.substring(1);
+                    } else if (seg.startsWith("s") && seg.length() > 1) {
+                        // v0.2.4：|s 本条锁定的实际寡核苷酸序列（5'->3'，可含简并码）
+                        seqOverride = seg.substring(1);
                     }
                 }
                 // 兼容：第 2 段为纯 role（无前缀）时设为角色
                 if (parts.length > 1 && !parts[1].startsWith("read") && !parts[1].startsWith("g")
                         && !parts[1].startsWith("a") && !parts[1].startsWith("c")
-                        && !parts[1].startsWith("p")) {
+                        && !parts[1].startsWith("p") && !parts[1].startsWith("s")) {
                     role = parts[1];
                 }
             }
@@ -479,6 +483,7 @@ public class ExportUtils {
             p.color = color;
             p.tailName = tailName;   // v0.1.72：恢复逐条 5′ 附加设置
             p.tailSeq = tailSeq;
+            if (seqOverride != null) { p.seq = seqOverride; p.seqLocked = true; }   // v0.2.4：锁定序列，刷新时不被参考覆盖
             if (row >= 0) p.rowOverride = row;   // 恢复导出时定死的布局行
             out.add(p);
             if (!partners.isEmpty()) {           // v0.1.46：引物已在 out 中，此时才写边

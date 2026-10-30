@@ -410,6 +410,21 @@ public class TailLibrary {
         return slotMode == MODE_ROLE ? new int[]{SLOT_R1, SLOT_R2} : new int[]{SLOT_F, SLOT_R};
     }
 
+    /**
+     * 实际生效的模式：当某一组端槽位有值、另一组全空时，自动采用「有值的那组」，
+     * 避免「填了 R1/R2 却停在 F/R 模式」导致附加序列既不显示、导出也被静默丢弃的坑
+     * （v0.2.4 修复：用户截图即此 —— R1/R2 端已填序列，但模式停在 F/R，引物结构预览
+     * 只画 F/R 空端，导出也因 slotHit 按链方向落到空 F/R 槽而丢了接头）。
+     * 两组都有值或都空 → 沿用用户显式选择的 slotMode（保留其明确意图）。
+     */
+    public static synchronized int effectiveMode() {
+        boolean role = !slotR1.isEmpty() || !slotR2.isEmpty();
+        boolean strand = !slotF.isEmpty() || !slotR.isEmpty();
+        if (role && !strand) return MODE_ROLE;
+        if (strand && !role) return MODE_STRAND;
+        return slotMode;
+    }
+
     /** 模式显示名。 */
     public static synchronized String modeLabel() {
         return slotMode == MODE_ROLE ? "按测序读段（R1 / R2）" : "按链方向（F / R）";
@@ -468,6 +483,20 @@ public class TailLibrary {
         return t.isEmpty() ? seq : t + seq;
     }
 
+    /**
+     * 某引物端槽解析：角色槽(R1/R2)优先于链向槽(F/R)，哪个槽有值用哪个；都不填返回 -1。
+     * v0.2.4 修复：原先 {@link #slotHit} 只按当前 mode 拨盘取一个维度，导致 R1/R2 已填但 mode 在 F/R 时
+     * 该适配器被完全忽略、导出与结构预览都丢尾巴。改为角色维度优先、链向维度兜底，与优先级注释一致。
+     */
+    private static int endSlotFor(Primer p) {
+        if (p == null) return -1;
+        int roleSlot = "R1".equals(p.role) ? SLOT_R1 : "R2".equals(p.role) ? SLOT_R2 : -1;
+        if (roleSlot >= 0 && !slotSeq(roleSlot).isEmpty()) return roleSlot;
+        int strandSlot = (p.strand == '+') ? SLOT_F : SLOT_R;
+        if (!slotSeq(strandSlot).isEmpty()) return strandSlot;
+        return -1;
+    }
+
     // ---------- v0.1.72 逐条覆盖 ----------
 
     /**
@@ -485,7 +514,7 @@ public class TailLibrary {
             Tail t = get(nm);
             if (t != null && t.seq != null) return t.seq;   // 显式指定 → 不再按 apply 过滤方向
         }
-        int slot = slotHit(p);
+        int slot = endSlotFor(p);
         if (slot >= 0 && !slotSeq(slot).isEmpty()) return slotSeq(slot);
         return seqFor(p.strand);   // 空槽 / 未命中 → 回落库条目默认
     }
@@ -499,7 +528,7 @@ public class TailLibrary {
             if (NONE.equals(nm)) return null;
             if (get(nm) != null) return nm;
         }
-        int slot = slotHit(p);
+        int slot = endSlotFor(p);
         if (slot >= 0 && !slotSeq(slot).isEmpty()) {
             return SLOT_NAMES[slot] + ":" + shortSeq8(slotSeq(slot));
         }
@@ -515,7 +544,7 @@ public class TailLibrary {
             if (NONE.equals(nm)) return "本条不加";
             if (get(nm) != null) return "本条";
         }
-        int slot = slotHit(p);
+        int slot = endSlotFor(p);
         if (slot >= 0 && !slotSeq(slot).isEmpty()) return SLOT_NAMES[slot] + "槽";
         if (seqFor(p.strand).isEmpty()) return "无";
         return defaultName(p.strand) != null ? ("方向默认" + (p.strand == '+' ? "(F)" : "(R)")) : "全局";

@@ -28,6 +28,7 @@ public class Primer {
     // tailName = "-" 表示「本条明确不附加」（连全局默认一起挡掉）；两者都空 = 继承方向/全局默认。
     public String tailName;
     public String tailSeq;
+    public boolean seqLocked = false;   // v0.2.4：序列已被用户编辑/导入锁定，刷新时不被参考基因组覆盖
 
     // 实时计算指标
     public double tm = Double.NaN;
@@ -92,6 +93,7 @@ public class Primer {
                 + (pairedWith.isEmpty() ? "" : "|p" + String.join(";", pairedWith))
                 + (color == null ? "" : "|c" + color)
                 + tailBedSegs()
+                + seqBedSegs()
                 + (pinRow == null ? "" : "|r" + pinRow);
     }
 
@@ -105,6 +107,17 @@ public class Primer {
             sb.append("|x").append(TailLibrary.sanitize(tailSeq));
         }
         return sb.toString();
+    }
+
+    /** v0.2.4：序列锁定（用户编辑/导入）时把实际寡核苷酸序列写入 BED（|s...），重载原样恢复，不再被参考覆盖。 */
+    public String seqBedSegs() {
+        if (!seqLocked || seq == null || seq.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < seq.length(); i++) {
+            char c = seq.charAt(i);
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) sb.append(Character.toUpperCase(c));
+        }
+        return sb.length() == 0 ? "" : "|s" + sb;
     }
 
     public String colorHex() {
@@ -142,6 +155,7 @@ public class Primer {
         p.rowOverride = rowOverride;
         p.tailName = tailName;
         p.tailSeq = tailSeq;
+        p.seqLocked = seqLocked;
         p.seq = seq;
         p.tm = tm;
         p.gc = gc;

@@ -1113,8 +1113,26 @@ public class PrimerTrack extends AbstractTrack {
                 sb.append("</font>");
             }
             if (p.seq != null && !p.seq.isEmpty()) {
-                String s = p.seq;
-                sb.append("<br>序列 5'→3': <font face='monospaced'>").append(s).append("</font>");
+                // v0.2.4：悬停序列逐位着色——突变=红、简并=紫，并附突变计数
+                PrimerMismatch.Result mr = PrimerMismatch.compare(p);
+                StringBuilder cs = new StringBuilder();
+                cs.append("<font face='monospaced'>");
+                for (int i = 0; i < mr.oligo.length(); i++) {
+                    char o = mr.oligo.charAt(i);
+                    int k = (i < mr.kind.length) ? mr.kind[i] : PrimerMismatch.MATCH;
+                    String col = (k == PrimerMismatch.MISMATCH || k == PrimerMismatch.DEGENERATE_MM) ? "red"
+                            : (k == PrimerMismatch.DEGENERATE ? "#82a" : "#222");
+                    cs.append("<font color='").append(col).append("'>").append(o).append("</font>");
+                }
+                cs.append("</font>");
+                sb.append("<br>序列 5'→3': ").append(cs);
+                if (mr.ok && mr.mismatchCount > 0)
+                    sb.append("  <font color='red'>（").append(mr.mismatchCount).append(" 个突变")
+                      .append(mr.degenerateCount > 0 ? "，含 " + mr.degenerateCount + " 简并" : "").append("）</font>");
+                else if (mr.ok && mr.degenerateCount > 0)
+                    sb.append("  <font color='#82a'>（含 ").append(mr.degenerateCount).append(" 个简并位点）</font>");
+                else if (!mr.ok)
+                    sb.append("  <font color='#a70'>（").append(mr.note).append("）</font>");
             }
             return sb.toString();
         } catch (Throwable t) {

@@ -99,10 +99,17 @@ public class AddPrimerDialog {
         gce.insets = new Insets(2, 4, 2, 4);
         gce.anchor = GridBagConstraints.WEST;
         final JTextArea seqArea = new JTextArea(2, 30);
-        seqArea.setEditable(false);
+        seqArea.setEditable(true);   // v0.2.4：序列可编辑（含突变/简并码）
         seqArea.setLineWrap(true);
         seqArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
         JScrollPane seqScroll = new JScrollPane(seqArea);
+        final boolean[] prog = {false};   // 程序化写入 seqArea 时抑制其 DocumentListener
+        final javax.swing.JEditorPane mmPane = new javax.swing.JEditorPane("text/html", "");
+        mmPane.setEditable(false);
+        mmPane.setPreferredSize(new java.awt.Dimension(360, 64));
+        final JLabel seqWarn = new JLabel("");   // 非法字符警告（红）
+        seqWarn.setForeground(Color.RED);
+        final JLabel mmInfo = new JLabel("");    // 突变摘要（正常色）
         final JLabel tmL = new JLabel("-");
         final JLabel gcL = new JLabel("-");
         final JLabel hairL = new JLabel("-");
@@ -133,6 +140,9 @@ public class AddPrimerDialog {
         gce.fill = GridBagConstraints.HORIZONTAL;
         gce.weightx = 1.0;
         addRow(evalGrid, gce, r3++, "序列", seqScroll);   // 序列框横向撑满左栏，便于展开查看
+        addRow(evalGrid, gce, r3++, "突变比对", new JScrollPane(mmPane));
+        addRow(evalGrid, gce, r3++, "", seqWarn);
+        addRow(evalGrid, gce, r3++, "", mmInfo);
         gce.fill = GridBagConstraints.NONE;
         gce.weightx = 0.0;
         addRow(evalGrid, gce, r3++, "Tm", tmL);
@@ -245,12 +255,17 @@ public class AddPrimerDialog {
                     p.chr = chr; p.start = s; p.end = e;
                     p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
                     p.role = (String) roleC.getSelectedItem();
-                    String rawSeq = readSeqFromGenome(chr, s, e);
+                    // v0.2.4：编辑已锁定的引物时，沿用其自定义序列（含突变/简并），不从基因组重推
+                    String rawSeq = (existing != null && existing.seqLocked && existing.seq != null)
+                            ? existing.seq : readSeqFromGenome(chr, s, e);
                     // v0.1.43：预览序列也存实际引物（R 反向互补），与导出/指标一致
                     p.seq = (p.strand == '+' || rawSeq.isEmpty()) ? rawSeq : PrimerMetrics.revComp(rawSeq);
                     PrimerMetrics.evaluate(p);
                     cur[0] = p;
+                    prog[0] = true;          // v0.2.4：抑制 seqArea 的程序化写入触发 rebuildFromSeq
                     display.run();
+                    prog[0] = false;
+                    renderMismatch(p, mmPane, mmInfo);
 
                     // self-dimer 形状（始终自动显示）
                     PrimerMetrics.DimerShape selfSh = PrimerMetrics.dimerShape(p.seq, p.seq);
@@ -320,6 +335,36 @@ public class AddPrimerDialog {
             }
         };
 
+        // v0.2.4：序列框编辑 → 实时重算区间（固定 5' 端）+ 指标 + 突变比对（不回写序列框，避免光标跳动）
+        final Runnable rebuildFromSeq = new Runnable() {
+            public void run() {
+                try {
+                    String cleaned = PrimerMismatch.clean(seqArea.getText());
+                    boolean okv = PrimerMismatch.valid(seqArea.getText());
+                    seqWarn.setText(okv ? "" : "含非法字符（仅 A/C/G/T 及简并码 RYSWKMBDHVN，U→T）");
+                    Primer p = cur[0];
+                    if (p == null) {
+                        p = new Primer();
+                        p.name = nameF.getText().trim();
+                        p.chr = chrF.getText().trim();
+                        try { p.start = Integer.parseInt(startF.getText().trim()); } catch (Exception ignore) {}
+                        try { p.end = Integer.parseInt(endF.getText().trim()); } catch (Exception ignore) {}
+                        p.strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
+                        cur[0] = p;
+                    }
+                    int len = cleaned.length();
+                    if (len > 0) {
+                        if (p.strand == '+') p.end = p.start + len; else p.start = p.end - len;
+                    }
+                    if (okv) p.seq = cleaned;   // 非法时不覆盖，保留上次合法值供比对
+                    try { PrimerMetrics.evaluate(p); } catch (Exception ignore) {}
+                    tmL.setText(fmt(p.tm));
+                    gcL.setText(fmt(p.gc) + (Double.isNaN(p.gc) ? "" : "%"));
+                    renderMismatch(p, mmPane, mmInfo);
+                } catch (Exception ignore) {}
+            }
+        };
+
         // 输入变化即刷新序列与单引物指标
         javax.swing.event.DocumentListener dl = new javax.swing.event.DocumentListener() {
             public void insertUpdate(javax.swing.event.DocumentEvent e) { updatePreview.run(); }
@@ -329,6 +374,12 @@ public class AddPrimerDialog {
         chrF.getDocument().addDocumentListener(dl);
         startF.getDocument().addDocumentListener(dl);
         endF.getDocument().addDocumentListener(dl);
+        // v0.2.4：序列框编辑 → 重算区间+突变比对（prog 为 true 时由 updatePreview 程序化写入，跳过避免回环）
+        seqArea.getDocument().addDocumentListener(new javax.swing.event.DocumentListener() {
+            public void insertUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+            public void removeUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+            public void changedUpdate(javax.swing.event.DocumentEvent e) { if (!prog[0]) rebuildFromSeq.run(); }
+        });
         ActionListener al = new ActionListener() {
             public void actionPerformed(java.awt.event.ActionEvent e) { updatePreview.run(); }
         };
@@ -354,16 +405,25 @@ public class AddPrimerDialog {
                     String chr = chrF.getText().trim();
                     int s = Integer.parseInt(startF.getText().trim());
                     int en = Integer.parseInt(endF.getText().trim());
-                    if (en - s < 10) {
-                        JOptionPane.showMessageDialog(dlg, "引物长度太小（<10nt）");
-                        return;
-                    }
-                    if (en - s > 100) {
-                        JOptionPane.showMessageDialog(dlg, "引物区段太大（>100nt），请填写引物本身区间（18-30nt）");
-                        return;
-                    }
                     char strand = strandC.getSelectedIndex() == 0 ? '+' : '-';
                     String role = (String) roleC.getSelectedItem();
+                    // v0.2.4：序列可编辑——读入并净化，固定 5' 端重算 3' 端（'+' 链保持 start，'-' 链保持 end）
+                    String rawSeq = seqArea.getText();
+                    String cleaned = PrimerMismatch.clean(rawSeq);
+                    if (!PrimerMismatch.valid(rawSeq)) {
+                        JOptionPane.showMessageDialog(dlg, "引物序列含非法字符（仅 A/C/G/T 及简并码 RYSWKMBDHVN，U 自动转 T）");
+                        return;
+                    }
+                    int len = cleaned.length();
+                    if (len < 4) {
+                        JOptionPane.showMessageDialog(dlg, "引物序列太短（<4nt）");
+                        return;
+                    }
+                    if (len > 200) {
+                        JOptionPane.showMessageDialog(dlg, "引物序列过长（>200nt）");
+                        return;
+                    }
+                    if (strand == '+') en = s + len; else s = en - len;
                     int rf = (Integer) readF.getValue();
                     int rr = (Integer) readR.getValue();
                     String pairText = pairF.getText().trim();
@@ -382,7 +442,9 @@ public class AddPrimerDialog {
                         Primer p = new Primer(name, chr, s, en, strand, role, readLen, null);
                         p.pairedWith = new java.util.LinkedHashSet<String>();
                         p.group = group;   // 写入打开对话框的那条引物轨所属分组
+                        p.seq = cleaned; p.seqLocked = true;   // v0.2.4：锁定编辑后的序列（含突变/简并）
                         PrimerStore.add(p);
+                        PrimerStore.refreshSequence(p);   // 锁定后跳过覆盖，仅重算指标
                         if (pairNames.length > 0) PrimerStore.linkByNames(p, pairNames);
                         // v0.1.30：添加时不再自动跑 O(n²) 二聚体评估，仅在用户点击「评估二聚体」时按需计算
                     } else {
@@ -394,9 +456,10 @@ public class AddPrimerDialog {
                         existing.strand = strand;
                         existing.role = role;
                         existing.readLen = readLen;
+                        existing.seq = cleaned; existing.seqLocked = true;   // v0.2.4：锁定编辑后的序列
                         PrimerStore.detach(existing);   // 先断开旧边，再按 pairNames 重建
                         if (pairNames.length > 0) PrimerStore.linkByNames(existing, pairNames);
-                        PrimerStore.refreshSequence(existing);
+                        PrimerStore.refreshSequence(existing);   // 锁定后跳过覆盖，仅重算指标
                         // v0.1.30：编辑保存时不再自动跑 O(n²) 二聚体评估
                     }
                     PrimerStore.refresh();
@@ -490,6 +553,14 @@ public class AddPrimerDialog {
 
     private static String fmt(double v) {
         return Double.isNaN(v) ? "-" : String.format("%.1f", v);
+    }
+
+    /** v0.2.4：渲染突变比对到面板（HTML 着色）+ 摘要标签。 */
+    private static void renderMismatch(Primer p, javax.swing.JEditorPane mm, javax.swing.JLabel info) {
+        PrimerMismatch.Result r = PrimerMismatch.compare(p);
+        mm.setText(PrimerMismatch.toHtml(r));
+        mm.setCaretPosition(0);
+        info.setText(r.ok ? PrimerMismatch.summary(r) : ("⚠ " + r.note));
     }
 
     private static JPanel section(String title) {

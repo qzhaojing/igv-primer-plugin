@@ -284,6 +284,7 @@ public class PrimerStore {
 
     /** 拉取参考序列并重算单引物指标 + 配对指标 */
     public static void refreshSequence(Primer p) {
+        if (p.seqLocked) { PrimerMetrics.evaluate(p); return; }   // v0.2.4：序列已锁定（用户编辑/导入），不被参考基因组覆盖，仍重算指标
         Genome g = GenomeManager.getInstance().getCurrentGenome();
         if (g == null) {
             // v0.1.52：不再无条件清空——从 FASTA 导入（或手填）的序列在没有加载基因组时应保留

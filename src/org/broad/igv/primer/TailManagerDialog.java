@@ -452,19 +452,19 @@ public class TailManagerDialog extends JDialog {
     private void updateStructure() {
         StringBuilder sb = new StringBuilder();
         // v0.1.79：按当前模式只显示对应的两端——绝不写出「F 端（role=R1）」这种把两个维度绑死的文案
-        if (TailLibrary.slotMode() == TailLibrary.MODE_ROLE) {
-            sb.append(structLine("R1 端（Read1 侧引物）", TailLibrary.SLOT_R1));
+        // v0.2.4：四个端全部列出（不再只显示当前 mode 的两个），这样 R1/R2 已填但在 F/R 模式下也能看到
+        String[] heads = {
+                "F 端（+ 链引物）", "R 端（- 链引物）",
+                "R1 端（Read1 侧引物）", "R2 端（Read2 侧引物）"
+        };
+        int[] allSlots = {TailLibrary.SLOT_F, TailLibrary.SLOT_R, TailLibrary.SLOT_R1, TailLibrary.SLOT_R2};
+        for (int i = 0; i < 4; i++) {
+            sb.append(structLine(heads[i], allSlots[i]));
             sb.append("\n");
-            sb.append(structLine("R2 端（Read2 侧引物）", TailLibrary.SLOT_R2));
-        } else {
-            sb.append(structLine("F 端（+ 链引物）", TailLibrary.SLOT_F));
-            sb.append("\n");
-            sb.append(structLine("R 端（- 链引物）", TailLibrary.SLOT_R));
         }
         sb.append("\n说明：这里只画结构，不会自动加任何序列；你在上面填了才会附加。\n");
-        sb.append("当前端命名：").append(TailLibrary.modeLabel())
-                .append("。F/R 与 R1/R2 是不同维度（F 端可能是 R1 也可能是 R2），一次只用一种。\n");
-        sb.append("优先级：逐条（右键引物） &gt; 端槽位 &gt; 库条目默认（")
+        sb.append("四个端都列出：角色槽(R1/R2)优先于链向槽(F/R)，哪个端填了、导出就用哪个。\n");
+        sb.append("优先级：逐条（右键引物） &gt; 端槽位(R1/R2 优先) &gt; 库条目默认（")
                 .append(TailLibrary.summaryLine()).append("）。");
         structA.setText(sb.toString());
         structA.setCaretPosition(0);

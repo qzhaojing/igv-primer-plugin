@@ -29,3 +29,6 @@ result.txt
 tests/*.class
 igv-patches/bin/
 test-classes/
+testclasses/
+proberun/
+*.log
