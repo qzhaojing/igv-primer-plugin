@@ -963,22 +963,32 @@ public class PrimerTrack extends AbstractTrack {
             g.drawRect(x0 - 2, y - 3, w + 4, h + 8);
         }
 
-        // v0.2.5：突变位点标记 —— 在引物箭头本体上按突变碱基的基因组位置画红色竖条，
-        // 让 track 上一眼看出哪段与参考不一致（与编辑框比对显示呼应：红=突变/不覆盖简并）。
-        // 仅标 MISMATCH 与 DEGENERATE_MM（确属与参考不一致）；DEGENERATE 覆盖参考，不标。
+        // v0.2.6：突变位点标记 —— 在引物箭头本体上按突变碱基的"居中"基因组坐标画标记，
+        // 让标记精确对准碱基中心（而非落在两碱基缝隙）。三类偏差用不同符号：
+        //   红竖条+顶方块 = 突变/不覆盖简并（MISMATCH / DEGENERATE_MM）
+        //   青色环(drawOval) = 插入(引物比参考多出的碱基，与参考形成"环/凸出"，INSERTION)
+        //   橙色短竖 = 缺失(引物比参考少了该碱基，DELETION)
         if (p.seq != null && !p.seq.isEmpty()) {
             PrimerMismatch.Result mr = PrimerMismatch.compare(p);
             if (mr.ok && mr.kind != null) {
-                int seqLen = Math.min(p.seq.length(), mr.kind.length);
-                for (int i = 0; i < seqLen; i++) {
-                    int k = mr.kind[i];
-                    if (k != PrimerMismatch.MISMATCH && k != PrimerMismatch.DEGENERATE_MM) continue;
-                    int gpos = (p.strand == '+') ? (p.start + i) : (p.end - 1 - i);
-                    int mx = ctx.bpToScreenPixel(gpos);
-                    if (mx < x0 - 1 || mx > x1 + 1) continue;   // 落箭头范围外不画
-                    g.setColor(new Color(0xD0, 0x00, 0x00));
-                    g.fillRect(mx - 1, y - 2, 2, h + 4);        // 2px 宽竖条，略超出箭头高度
-                    g.fillRect(mx - 2, y - 4, 4, 2);            // 顶部小方块强化
+                int n = mr.kind.length;
+                for (int c = 0; c < n; c++) {
+                    double coord = mr.markerCoord[c];
+                    if (Double.isNaN(coord)) continue;
+                    int k = mr.kind[c];
+                    int mx = (int) ctx.bpToScreenPixel(coord);
+                    if (mx < x0 - 2 || mx > x1 + 2) continue;   // 落箭头范围外不画
+                    if (k == PrimerMismatch.MISMATCH || k == PrimerMismatch.DEGENERATE_MM) {
+                        g.setColor(new Color(0xD0, 0x00, 0x00));
+                        g.fillRect(mx - 1, y - 2, 2, h + 4);    // 2px 宽红竖条，略超出箭头高度
+                        g.fillRect(mx - 2, y - 4, 4, 2);        // 顶部小方块强化
+                    } else if (k == PrimerMismatch.INSERTION) {
+                        g.setColor(new Color(0x00, 0xBC, 0xD4)); // 青：环/凸出
+                        g.drawOval(mx - 3, y - 9, 6, 6);        // 箭头上方小环
+                    } else if (k == PrimerMismatch.DELETION) {
+                        g.setColor(new Color(0xE0, 0x7B, 0x00)); // 橙：缺口
+                        g.fillRect(mx - 1, y - 3, 2, 3);
+                    }
                 }
             }
         }
@@ -1133,26 +1143,43 @@ public class PrimerTrack extends AbstractTrack {
                 sb.append("</font>");
             }
             if (p.seq != null && !p.seq.isEmpty()) {
-                // v0.2.4：悬停序列逐位着色——突变=红、简并=紫，并附突变计数
+                // v0.2.4+：悬停序列逐位着色（对齐后）——突变=红、简并=紫、插入=青、缺失=橙
                 PrimerMismatch.Result mr = PrimerMismatch.compare(p);
                 StringBuilder cs = new StringBuilder();
                 cs.append("<font face='monospaced'>");
-                for (int i = 0; i < mr.oligo.length(); i++) {
-                    char o = mr.oligo.charAt(i);
-                    int k = (i < mr.kind.length) ? mr.kind[i] : PrimerMismatch.MATCH;
-                    String col = (k == PrimerMismatch.MISMATCH || k == PrimerMismatch.DEGENERATE_MM) ? "red"
-                            : (k == PrimerMismatch.DEGENERATE ? "#82a" : "#222");
-                    cs.append("<font color='").append(col).append("'>").append(o).append("</font>");
+                int n = (mr.kind == null) ? 0 : mr.kind.length;
+                for (int c = 0; c < n; c++) {
+                    char o = mr.oligo.charAt(c);
+                    int k = mr.kind[c];
+                    String col;
+                    if (o == '-') col = "#e07b00";          // 缺失位置
+                    else if (k == PrimerMismatch.MISMATCH || k == PrimerMismatch.DEGENERATE_MM) col = "red";
+                    else if (k == PrimerMismatch.DEGENERATE) col = "#82a";
+                    else if (k == PrimerMismatch.INSERTION) col = "#007a8a";
+                    else col = "#222";
+                    cs.append("<font color='").append(col).append("'>")
+                      .append(o == '-' ? "·" : o).append("</font>");
                 }
                 cs.append("</font>");
                 sb.append("<br>序列 5'→3': ").append(cs);
-                if (mr.ok && mr.mismatchCount > 0)
-                    sb.append("  <font color='red'>（").append(mr.mismatchCount).append(" 个突变")
-                      .append(mr.degenerateCount > 0 ? "，含 " + mr.degenerateCount + " 简并" : "").append("）</font>");
-                else if (mr.ok && mr.degenerateCount > 0)
-                    sb.append("  <font color='#82a'>（含 ").append(mr.degenerateCount).append(" 个简并位点）</font>");
-                else if (!mr.ok)
+                // 指示行（与编辑框一致）：.=一致 空格=突变 o=插入(环) x=缺失
+                StringBuilder ind = new StringBuilder();
+                for (int c = 0; c < n; c++) {
+                    int k = mr.kind[c];
+                    ind.append(k == PrimerMismatch.MATCH ? "." : k == PrimerMismatch.MISMATCH || k == PrimerMismatch.DEGENERATE_MM ? " "
+                            : k == PrimerMismatch.INSERTION ? "o" : k == PrimerMismatch.DELETION ? "x" : ".");
+                }
+                sb.append("<br><font face='monospaced' color='#666'>比对: ").append(ind).append("</font>");
+                if (mr.ok) {
+                    StringBuilder cnt = new StringBuilder();
+                    if (mr.mismatchCount > 0) cnt.append(mr.mismatchCount).append(" 突变");
+                    if (mr.insertionCount > 0) cnt.append(cnt.length() == 0 ? "" : "、").append(mr.insertionCount).append(" 插入(环)");
+                    if (mr.deletionCount > 0) cnt.append(cnt.length() == 0 ? "" : "、").append(mr.deletionCount).append(" 缺失");
+                    if (mr.degenerateCount > 0) cnt.append(cnt.length() == 0 ? "" : "、").append(mr.degenerateCount).append(" 简并");
+                    if (cnt.length() > 0) sb.append("  <font color='#a70'>（").append(cnt).append("）</font>");
+                } else {
                     sb.append("  <font color='#a70'>（").append(mr.note).append("）</font>");
+                }
             }
             return sb.toString();
         } catch (Throwable t) {
